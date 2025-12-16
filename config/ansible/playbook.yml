@@ -8,12 +8,45 @@
     infra_conf: "{{ lookup('ini', 'ECR_URL file=/etc/infra_config.env') }}"
     project_root: "{{ lookup('ini', 'PROJECT_ROOT file=/etc/infra_config.env') }}"
     db_pass: "{{ lookup('ini', 'ROOT_DB_PASS file=/etc/infra_config.env') }}"
+    # Optional: Read OCI Secret ID if it exists (defaults to empty if not found)
+    oci_secret_id: "{{ lookup('ini', 'OCI_SECRET_ID file=/etc/infra_config.env', default='') }}"
+    # Detect Cloud Type
+    is_oci: "{{ lookup('env', 'OCI_AUTH_TYPE') == 'instance_principal' }}"
 
   tasks:
-    # --- Docker Setup ---
-    - name: Install Docker Dependencies
+    # --- Docker Setup (Official Repo Method) ---
+    - name: Install Prerequisite Packages
       apt:
-        pkg: [docker.io, docker-compose-plugin]
+        pkg: [ca-certificates, curl, gnupg, python3-pip]
+        state: present
+        update_cache: yes
+
+    - name: Create Keyring Directory
+      file:
+        path: /etc/apt/keyrings
+        state: directory
+        mode: '0755'
+
+    - name: Add Docker GPG Key
+      get_url:
+        url: https://download.docker.com/linux/ubuntu/gpg
+        dest: /etc/apt/keyrings/docker.asc
+        mode: '0644'
+
+    - name: Add Docker Repository
+      apt_repository:
+        repo: "deb [arch=amd64 signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/ubuntu {{ ansible_distribution_release }} stable"
+        filename: docker
+        state: present
+
+    - name: Install Docker Engine and Compose Plugin
+      apt:
+        pkg: 
+          - docker-ce 
+          - docker-ce-cli 
+          - containerd.io 
+          - docker-buildx-plugin 
+          - docker-compose-plugin
         state: present
         update_cache: yes
 
@@ -46,17 +79,26 @@
         owner: ubuntu
         mode: "0600"
 
+    # --- Cloud Specific Secrets ---
+    
+    # 1. AWS Secret Fetching is handled in user_data.sh (before Ansible), 
+    #    but we can add a check here if needed.
+    
+    # 2. OCI Secret Fetching (Conditional)
+    - name: Fetch Secret from OCI Vault
+      shell: |
+        oci secrets secret-bundle get \
+          --secret-id {{ oci_secret_id }} \
+          --auth instance_principal \
+          --stage CURRENT \
+          --query "data.\"secret-bundle-content\".content" \
+          --raw-output | base64 --decode > {{ project_root }}/orchestration/env/hikegh.env
+      when: is_oci and oci_secret_id | length > 0
+      # Only runs if we are on OCI AND we provided a Secret ID in infra_config.env
+
     # --- Start Infrastructure ---
-    # We start DB and Caddy immediately. Apps will fail until images are pushed.
-    - name: Start Base Services
+    - name: Start Base Services (DB & Caddy)
       shell: |
         docker compose up -d caddy db
       args:
         chdir: "{{ project_root }}/orchestration"
-
-    # In playbook.yml tasks:
-
-    - name: Fetch Secret from OCI (If OCI)
-      shell: |
-        oci secrets secret-bundle get --secret-id <SECRET_OCID> --auth instance_principal --stage CURRENT --query "data.\"secret-bundle-content\".content" --raw-output | base64 --decode > {{ project_root }}/orchestration/env/hikegh.env
-      when: lookup('env', 'OCI_AUTH_TYPE') == 'instance_principal'
