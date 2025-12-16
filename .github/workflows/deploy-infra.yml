@@ -1,0 +1,39 @@
+name: Deploy Infrastructure
+
+on:
+    push:
+        branches:
+            - main
+        paths:
+            - "orchestration/**" # Only run if we change config files
+
+jobs:
+    update-server:
+        runs-on: ubuntu-latest
+        permissions:
+            id-token: write
+            contents: read
+        steps:
+            - name: Checkout Code
+              uses: actions/checkout@v4
+
+            - name: Configure AWS Credentials
+              uses: aws-actions/configure-aws-credentials@v4
+              with:
+                  aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+                  aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+                  aws-region: us-east-1
+
+            - name: Send Deploy Command to Server
+              run: |
+                  aws ssm send-command \
+                    --document-name "AWS-RunShellScript" \
+                    --targets "Key=tag:Name,Values=staging-box" \
+                    --parameters 'commands=[
+                      "cd /opt/staging",
+                      "git pull origin main",
+                      "cd orchestration",
+                      "docker compose up -d --remove-orphans",
+                      "docker compose exec -w /etc/caddy caddy caddy reload"
+                    ]' \
+                    --comment "Auto-deployment from GitHub"
