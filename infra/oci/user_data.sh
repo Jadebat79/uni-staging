@@ -37,10 +37,8 @@ ansible-galaxy collection install -r requirements.yml
 cat <<EOF > /etc/infra_config.env
 ECR_URL=${ecr_url}
 PROJECT_ROOT=/opt/${project_name}
-# OCI specific flag to tell Ansible to use Instance Principal
 OCI_AUTH_TYPE=instance_principal
+OCI_SECRET_ID=<PASTE_YOUR_REAL_OCID_HERE_OR_PASS_VIA_VAR>
 EOF
 
-# Update playbook to use community.general.oci_secret_bundle if needed, 
-# or just run it.
 ansible-playbook playbook.yml
