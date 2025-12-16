@@ -1,0 +1,69 @@
+services:
+  # --- Reverse Proxy ---
+  caddy:
+    image: caddy:alpine
+    container_name: caddy
+    restart: always
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile
+      - caddy_data:/data
+    networks:
+      - staging-net
+
+  # --- Shared Database ---
+  db:
+    image: postgres:15-alpine
+    container_name: postgres
+    restart: always
+    environment:
+      POSTGRES_PASSWORD: ${ROOT_DB_PASS}
+    volumes:
+      - pg_data:/var/lib/postgresql/data
+      - ./init-db.sh:/docker-entrypoint-initdb.d/init-db.sh
+    networks:
+      - staging-net
+
+  # --- Application Placeholders ---
+  # These wait for external CI/CD to push images and run 'docker compose up app1'
+  app1:
+    image: ${ECR_URL}/hikegh-backend:${HIKEGH_TAG:-latest}
+    container_name: hikegh_backend
+    env_file: ./env/hikegh.env
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000
+    volumes:
+      - hikegh_uploads:/app/uploads
+    networks: [staging-net]
+    depends_on: [db]
+
+  app2:
+    image: ${ECR_URL}/universal-staging/app2:${APP2_TAG:-latest}
+    env_file: ./env/app2.env
+    networks: [staging-net]
+    depends_on: [db]
+  
+  # --- Log Viewer ---
+  dozzle:
+    image: amir20/dozzle:latest
+    container_name: dozzle
+    restart: always
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    networks:
+      - staging-net
+    environment:
+      DOZZLE_LEVEL: info
+      DOZZLE_TAIL: 100
+      # Optional: Simple password protection on top of IP whitelist
+      # DOZZLE_USERNAME: admin
+      # DOZZLE_PASSWORD: ${ROOT_DB_PASS}
+
+volumes:
+  caddy_data:
+  pg_data:
+  hikegh_uploads:
+
+networks:
+  staging-net:

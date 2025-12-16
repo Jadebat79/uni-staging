@@ -1,0 +1,25 @@
+# Define Office IP Snippet
+(office_only) {
+    @blocked {
+        not remote_ip <YOUR_OFFICE_IP>
+    }
+    respond @blocked "Access Denied" 403
+}
+
+# --- App 1 ---
+api.staging.<DOMAIN> {
+    import office_only
+    reverse_proxy app1:8080
+}
+
+# --- App 2 ---
+ussd.staging.<DOMAIN> {
+    import office_only
+    reverse_proxy app2:3000
+}
+
+# --- Log Viewer ---
+logs.staging.<DOMAIN> {
+    import office_only
+    reverse_proxy dozzle:8080
+}
