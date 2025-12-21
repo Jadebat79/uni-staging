@@ -2,7 +2,7 @@
 - name: Provision Universal Staging Box
   hosts: localhost
   connection: local
-  become: yes
+  become: true
   vars:
     # --- CONFIGURATION (Reads from /etc/infra_config.env) ---
     # We use 'type=properties' to read the file even without [headers]
