@@ -3,16 +3,31 @@
   hosts: localhost
   connection: local
   become: true
+  handlers:
+    - name: restart docker
+      service:
+        name: docker
+        state: restarted
   vars:
     # --- CONFIGURATION (Reads from /etc/infra_config.env) ---
     # We use 'type=properties' to read the file even without [headers]
     infra_conf: "{{ lookup('ini', 'ECR_URL type=properties file=/etc/infra_config.env') }}"
     project_root: "{{ lookup('ini', 'PROJECT_ROOT type=properties file=/etc/infra_config.env') }}"
     db_pass: "{{ lookup('ini', 'ROOT_DB_PASS type=properties file=/etc/infra_config.env') }}"
-    # We infer the region from the ECR URL (e.g. 123.dkr.ecr.us-east-1.amazonaws.com)
-    aws_region: "{{ infra_conf.split('.')[3] }}"
+    oci_region: "{{ lookup('ini', 'OCI_REGION type=properties file=/etc/infra_config.env') | default('us-east-1', true) }}"
+    # Infer AWS region only when using ECR; otherwise fall back to OCI region
+    aws_region: "{{ infra_conf.split('.')[3] if ('dkr.ecr' in infra_conf) else oci_region }}"
     # Hardcode your domain here OR pass it via Terraform/User Data
-    root_domain: "teamcanvas.site" 
+    root_domain: "teamcanvas.site"
+    # Detect cloud provider from ECR URL pattern
+    # AWS: *.dkr.ecr.*.amazonaws.com
+    # OCI: *.ocir.io
+    is_aws: "{{ 'dkr.ecr' in infra_conf }}"
+    is_oci: "{{ 'ocir.io' in infra_conf }}"
+    # Load apps configuration
+    apps_config: "{{ lookup('file', project_root + '/config/apps-config.yml') | from_yaml | default({'apps': []}, true) }}"
+    # Project name for SSM paths (default to 'staging', can be overridden)
+    project_name: "{{ lookup('ini', 'PROJECT_NAME type=properties file=/etc/infra_config.env') | default('staging', true) }}" 
 
   tasks:
     # --- 1. SYSTEM PRE-REQUISITES ---
@@ -27,13 +42,16 @@
       stat:
         path: /usr/local/bin/aws
       register: aws_cli_bin
+      when: is_aws | bool
 
     - name: Download and Install AWS CLI v2
       shell: |
         curl "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o "/tmp/awscliv2.zip"
         unzip -o /tmp/awscliv2.zip -d /tmp
         /tmp/aws/install --update
-      when: not aws_cli_bin.stat.exists
+      when:
+        - is_aws | bool
+        - not aws_cli_bin.stat.exists
 
     # --- 3. INSTALL DOCKER (The Official Way) ---
     - name: Create Keyring Directory
@@ -66,16 +84,143 @@
     - name: Add ubuntu user to docker group
       user: name=ubuntu groups=docker append=yes
 
+    # --- 3.5. CREATE DEPLOY USER ---
+    - name: Create deploy user
+      user:
+        name: deploy
+        groups: docker,sudo
+        shell: /bin/bash
+        create_home: yes
+        home: /home/deploy
+        comment: "Deployment user for staging environment"
+
+    - name: Set up deploy user SSH directory
+      file:
+        path: /home/deploy/.ssh
+        state: directory
+        owner: deploy
+        group: deploy
+        mode: '0700'
+
+    - name: Add deploy user to sudoers (passwordless for deployment tasks)
+      lineinfile:
+        path: /etc/sudoers.d/deploy
+        line: "deploy ALL=(ALL) NOPASSWD: /usr/bin/docker, /usr/bin/docker-compose, /usr/local/bin/docker-compose"
+        create: yes
+        mode: '0440'
+        validate: 'visudo -cf %s'
+
+    # --- 3.6. SSH SECURITY HARDENING ---
+    - name: Disable root login via SSH
+      lineinfile:
+        path: /etc/ssh/sshd_config
+        regexp: '^#?PermitRootLogin'
+        line: 'PermitRootLogin no'
+        backup: yes
+
+    - name: Disable password authentication (SSH keys only)
+      lineinfile:
+        path: /etc/ssh/sshd_config
+        regexp: '^#?PasswordAuthentication'
+        line: 'PasswordAuthentication no'
+        backup: yes
+
+    - name: Restart SSH service
+      service:
+        name: sshd
+        state: restarted
+        enabled: yes
+
+    # --- 3.7. FIREWALL CONFIGURATION (UFW) ---
+    - name: Install UFW
+      apt:
+        name: ufw
+        state: present
+
+    - name: Set UFW default policies
+      ufw:
+        direction: "{{ item.direction }}"
+        policy: "{{ item.policy }}"
+      loop:
+        - { direction: 'incoming', policy: 'deny' }
+        - { direction: 'outgoing', policy: 'allow' }
+
+    - name: Allow HTTP
+      ufw:
+        rule: allow
+        port: '80'
+        proto: tcp
+
+    - name: Allow HTTPS
+      ufw:
+        rule: allow
+        port: '443'
+        proto: tcp
+
+    - name: Allow SSH (OCI only)
+      ufw:
+        rule: allow
+        port: '22'
+        proto: tcp
+      when: is_oci | bool
+
+    - name: Enable UFW
+      ufw:
+        state: enabled
+
+    # Note: On AWS, SSH (22) remains blocked at UFW level; use SSM.
+
+    # --- 3.8. DOCKER LOG ROTATION CONFIGURATION ---
+    - name: Create Docker daemon.json directory
+      file:
+        path: /etc/docker
+        state: directory
+        mode: '0755'
+
+    - name: Configure Docker log rotation in daemon.json
+      copy:
+        content: |
+          {
+            "log-driver": "json-file",
+            "log-opts": {
+              "max-size": "10m",
+              "max-file": "3"
+            }
+          }
+        dest: /etc/docker/daemon.json
+        mode: '0644'
+      notify: restart docker
+
+    # --- 3.9. AWS SSM AGENT VERIFICATION ---
+    - name: Check if SSM agent is installed
+      stat:
+        path: /usr/bin/amazon-ssm-agent
+      register: ssm_agent_check
+
+    - name: Install SSM agent if missing (Ubuntu)
+      apt:
+        name: amazon-ssm-agent
+        state: present
+        update_cache: yes
+      when: not ssm_agent_check.stat.exists
+
+    - name: Ensure SSM agent is running
+      service:
+        name: amazon-ssm-agent
+        state: started
+        enabled: yes
+      when: is_aws | bool
+
     # --- 4. ORCHESTRATION SETUP ---
     - name: Create Directories
       file:
         path: "{{ item }}"
         state: directory
         mode: "0755"
-        owner: ubuntu
+        owner: deploy
+        group: deploy
       loop:
         - "{{ project_root }}/orchestration/env"
-        - "{{ project_root }}/orchestration/pg_data"
         - "{{ project_root }}/orchestration/caddy_data"
 
     # --- 5. CONFIGURATION FIXES ---
@@ -84,19 +229,111 @@
         content: |
           # Generated by Ansible
           ECR_URL={{ infra_conf }}
-          ROOT_DB_PASS={{ db_pass }}
+          DOMAIN_NAME={{ root_domain }}
+          AWS_REGION={{ aws_region }}
+          # OCI Logging variables (used only on OCI)
+          OCI_TENANCY_OCID={{ lookup('ini', 'OCI_TENANCY_OCID type=properties file=/etc/infra_config.env') | default('', true) }}
+          OCI_COMPARTMENT_OCID={{ lookup('ini', 'OCI_COMPARTMENT_OCID type=properties file=/etc/infra_config.env') | default('', true) }}
+          OCI_LOG_ID={{ lookup('ini', 'OCI_LOG_ID type=properties file=/etc/infra_config.env') | default('', true) }}
+          # Office IP for Caddy IP whitelist (update this with your actual office IP)
+          OFFICE_IP=<YOUR_OFFICE_IP>
         dest: "{{ project_root }}/orchestration/.env"
-        owner: ubuntu
+        owner: deploy
+        group: deploy
         mode: "0600"
 
-    - name: Update Caddyfile Domain Name
+    - name: Update Caddyfile Office IP Placeholder
       replace:
         path: "{{ project_root }}/orchestration/Caddyfile"
-        regexp: '<domain>'
-        replace: "{{ root_domain }}"
-      # This fixes the "subject does not qualify for certificate" error
+        regexp: '<YOUR_OFFICE_IP>'
+        replace: "{{ lookup('ini', 'OFFICE_IP type=properties file=/etc/infra_config.env') | default('CHANGE_ME', true) }}"
+      # Note: Office IP should be set in /etc/infra_config.env or Terraform variables
+      failed_when: false  # Don't fail if placeholder not found
 
-    # --- 6. AUTHENTICATION & STARTUP ---
+    # --- 6. FETCH APPLICATION SECRETS FROM SSM/OCI VAULT ---
+    # This section fetches secrets for each app and writes them to .env files
+    # Secrets must be uploaded to SSM/OCI Vault before running this playbook
+    
+    - name: Check if apps are configured
+      debug:
+        msg: "Found {{ apps_config.apps | length }} app(s) to fetch secrets for: {{ apps_config.apps | map(attribute='name') | join(', ') }}"
+      when: apps_config.apps | length > 0
+
+    - name: Fetch secrets from AWS SSM Parameter Store
+      when: is_aws | bool and apps_config.apps | length > 0
+      loop: "{{ apps_config.apps }}"
+      loop_control:
+        label: "{{ item.name }}"
+      block:
+        - name: Fetch secret for {{ item.name }} from SSM
+          shell: |
+            aws ssm get-parameter \
+              --name "/{{ project_name }}/{{ item.name }}/env" \
+              --with-decryption \
+              --query 'Parameter.Value' \
+              --output text \
+              --region {{ aws_region }}
+          register: secret_result
+          no_log: true  # Don't log secret values
+          failed_when: false
+          changed_when: false
+
+        - name: Write .env file for {{ item.name }}
+          copy:
+            content: "{{ secret_result.stdout }}"
+            dest: "{{ project_root }}/orchestration/env/{{ item.name }}.env"
+            owner: deploy
+            group: deploy
+            mode: "0600"
+          when: secret_result.rc == 0
+          no_log: true
+
+        - name: Warn if secret not found for {{ item.name }}
+          debug:
+            msg: "WARNING: Secret /{{ project_name }}/{{ item.name }}/env not found in SSM. Skipping .env file creation. Upload it manually or the app will fail to start."
+          when: secret_result.rc != 0
+
+    - name: Fetch secrets from OCI Vault
+      when: is_oci | bool and apps_config.apps | length > 0
+      loop: "{{ apps_config.apps }}"
+      loop_control:
+        label: "{{ item.name }}"
+      block:
+        - name: Check if OCI secret ID pattern is configured
+          set_fact:
+            # OCI Vault secret naming pattern: {project_name}-{app_name}-env
+            # You may need to adjust this based on your OCI Vault structure
+            oci_secret_ocid: "{{ lookup('ini', 'OCI_SECRET_' + item.name.upper() + '_OCID type=properties file=/etc/infra_config.env', default='') }}"
+        
+        - name: Fetch secret from OCI Vault for {{ item.name }}
+          shell: |
+            oci secrets secret-bundle get \
+              --secret-id "{{ oci_secret_ocid }}" \
+              --auth instance_principal \
+              --query 'data."secret-bundle-content".content' \
+              --raw-output | base64 -d
+          register: secret_result
+          no_log: true
+          failed_when: false
+          changed_when: false
+          when: oci_secret_ocid != ""
+
+        - name: Write .env file for {{ item.name }} (OCI)
+          copy:
+            content: "{{ secret_result.stdout }}"
+            dest: "{{ project_root }}/orchestration/env/{{ item.name }}.env"
+            owner: deploy
+            group: deploy
+            mode: "0600"
+          when: secret_result.rc == 0 and oci_secret_ocid != ""
+          no_log: true
+
+        - name: Warn if OCI secret OCID not configured for {{ item.name }}
+          debug:
+            msg: "WARNING: OCI_SECRET_{{ item.name.upper() }}_OCID not found in /etc/infra_config.env. Skipping .env file creation."
+          when: oci_secret_ocid == ""
+
+    # --- 7. AUTHENTICATION & STARTUP ---
     - name: Login to AWS ECR
       shell: |
         aws ecr get-login-password --region {{ aws_region }} | docker login --username AWS --password-stdin {{ infra_conf }}
@@ -104,9 +341,30 @@
       retries: 3
       delay: 5
       until: ecr_login.rc == 0
+      become_user: deploy
 
-    - name: Start Infrastructure (Caddy & DB)
+    - name: Set ownership of orchestration directory to deploy user
+      file:
+        path: "{{ project_root }}/orchestration"
+        owner: deploy
+        group: deploy
+        recurse: yes
+
+    - name: Select Fluent Bit config for AWS
+      copy:
+        src: "{{ project_root }}/orchestration/fluent-bit.conf"
+        dest: "{{ project_root }}/orchestration/fluent-bit.conf"
+      when: is_aws | bool
+
+    - name: Select Fluent Bit config for OCI
+      copy:
+        src: "{{ project_root }}/orchestration/fluent-bit-oci.conf"
+        dest: "{{ project_root }}/orchestration/fluent-bit.conf"
+      when: is_oci | bool
+
+    - name: Start Infrastructure (Caddy, Fluent Bit, and Dozzle - DB is external RDS/OCI Autonomous)
       shell: |
-        docker compose up -d caddy db
+        docker compose up -d caddy fluent-bit dozzle
       args:
         chdir: "{{ project_root }}/orchestration"
+      become_user: deploy

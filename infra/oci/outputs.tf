@@ -9,7 +9,7 @@ output "instance_ocid" {
 }
 
 output "ocir_registry_url" {
-  description = "The Base URL for pushing Docker images (Add to GitHub Secrets)"
+  description = "The Base URL for pushing Docker images (Add to GitHub Secrets or Bitbucket Repository Variables)"
   # Constructs: <region-code>.ocir.io/<tenancy_namespace>
   value       = "${var.region}.ocir.io/${data.oci_objectstorage_namespace.ns.namespace}"
 }

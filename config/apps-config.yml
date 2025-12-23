@@ -1,0 +1,21 @@
+# Application Configuration
+# This file defines which applications are deployed and their metadata
+# Used by Ansible to fetch secrets and configure routing
+
+apps:
+  - name: hikegh
+    display_name: HikeGH Backend
+    # SSM Parameter Store path: /{project_name}/{app_name}/env
+    # OCI Vault secret name: {app_name}-env
+    # Output .env file: orchestration/env/{app_name}.env
+    
+  - name: app2
+    display_name: USSD Service
+    # SSM Parameter Store path: /{project_name}/{app_name}/env
+    # OCI Vault secret name: {app_name}-env
+    # Output .env file: orchestration/env/{app_name}.env
+
+# Future apps can be added here:
+#  - name: app3
+#    display_name: Payment Service
+

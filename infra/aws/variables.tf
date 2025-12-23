@@ -27,15 +27,30 @@ variable "allowed_cidr" {
 }
 
 variable "github_repo_url" {
-  description = "HTTPS URL of this infrastructure repository"
+  description = "HTTPS URL of this infrastructure repository (GitHub or Bitbucket)"
   type        = string
   default     = ""
-  # Example: "https://github.com/jade/universal-staging.git"
+  # Example GitHub: "https://github.com/jade/staging.git"
+  # Example Bitbucket: "https://bitbucket.org/workspace/staging.git"
 }
 
 variable "github_token" {
-  description = "GitHub PAT to clone this repo on the server"
+  description = "GitHub PAT or Bitbucket App Password to clone this repo on the server"
   type        = string
   sensitive   = true
   default     = ""
+  # For GitHub: Use Personal Access Token (PAT)
+  # For Bitbucket: Use App Password
+}
+
+variable "office_ip" {
+  description = "Office IP address for Caddy IP whitelist (e.g., 203.0.113.5)"
+  type        = string
+  default     = ""
+}
+
+variable "enable_disk_alarm" {
+  description = "Enable CloudWatch alarm for disk usage > 80%"
+  type        = bool
+  default     = true
 }

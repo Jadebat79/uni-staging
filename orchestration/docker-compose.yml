@@ -1,33 +1,37 @@
 services:
-  # --- Reverse Proxy ---
+  # --- Reverse Proxy (Caddy Docker Proxy - Auto-Discovers Containers) ---
   caddy:
-    image: caddy:alpine
+    image: lucaslorentz/caddy-docker-proxy:latest
     container_name: caddy
     restart: always
     ports:
       - "80:80"
       - "443:443"
     volumes:
-      - ./Caddyfile:/etc/caddy/Caddyfile
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
       - caddy_data:/data
-    networks:
-      - staging-net
-
-  # --- Shared Database ---
-  db:
-    image: postgres:15-alpine
-    container_name: postgres
-    restart: always
     environment:
-      POSTGRES_PASSWORD: ${ROOT_DB_PASS}
-    volumes:
-      - pg_data:/var/lib/postgresql/data
-      - ./init-db.sh:/docker-entrypoint-initdb.d/init-db.sh
+      - CADDY_INGRESS_NETWORKS=staging-net
+      # Office IP for IP whitelist (set via environment variable or Caddyfile)
+      - CADDY_OFFICE_IP=${OFFICE_IP:-}
     networks:
       - staging-net
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:2019/config/"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
 
-  # --- Application Placeholders ---
-  # These wait for external CI/CD to push images and run 'docker compose up app1'
+  # --- Application Services ---
+  # Caddy Docker Proxy automatically discovers containers via labels
+  # No manual Caddyfile updates needed when adding new apps!
   app1:
     image: ${ECR_URL}/hikegh-backend:${HIKEGH_TAG:-latest}
     container_name: hikegh_backend
@@ -36,14 +40,74 @@ services:
     volumes:
       - hikegh_uploads:/app/uploads
     networks: [staging-net]
-    depends_on: [db]
+    labels:
+      # Caddy auto-discovery labels
+      - "caddy=api.staging.${DOMAIN_NAME:-teamcanvas.site}"
+      - "caddy.reverse_proxy={{upstreams 8000}}"
+      - "caddy.import=office_only"  # Apply IP whitelist
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
 
   app2:
-    image: ${ECR_URL}/universal-staging/app2:${APP2_TAG:-latest}
+    image: ${ECR_URL}/staging/app2:${APP2_TAG:-latest}
+    container_name: app2
     env_file: ./env/app2.env
     networks: [staging-net]
-    depends_on: [db]
+    labels:
+      # Caddy auto-discovery labels
+      - "caddy=ussd.staging.${DOMAIN_NAME:-teamcanvas.site}"
+      - "caddy.reverse_proxy={{upstreams 3000}}"
+      - "caddy.import=office_only"  # Apply IP whitelist
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
   
+  # --- Log Aggregation (Fluent Bit) ---
+  fluent-bit:
+    image: fluent/fluent-bit:latest
+    container_name: fluent-bit
+    restart: always
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - /var/lib/docker/containers:/var/lib/docker/containers:ro
+      - ./fluent-bit.conf:/fluent-bit/etc/fluent-bit.conf:ro
+    networks:
+      - staging-net
+    environment:
+      - FLUENT_BIT_CONFIG_FILE=/fluent-bit/etc/fluent-bit.conf
+      - AWS_REGION=${AWS_REGION:-us-east-1}
+      - OCI_TENANCY_OCID=${OCI_TENANCY_OCID:-}
+      - OCI_COMPARTMENT_OCID=${OCI_COMPARTMENT_OCID:-}
+      - OCI_LOG_ID=${OCI_LOG_ID:-}
+    healthcheck:
+      test: ["CMD", "pgrep", "fluent-bit"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
   # --- Log Viewer ---
   dozzle:
     image: amir20/dozzle:latest
@@ -59,10 +123,25 @@ services:
       # Optional: Simple password protection on top of IP whitelist
       # DOZZLE_USERNAME: admin
       # DOZZLE_PASSWORD: ${ROOT_DB_PASS}
+    labels:
+      # Caddy auto-discovery labels
+      - "caddy=logs.staging.${DOMAIN_NAME:-teamcanvas.site}"
+      - "caddy.reverse_proxy={{upstreams 8080}}"
+      - "caddy.import=office_only"  # Apply IP whitelist
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:8080/"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
 
 volumes:
   caddy_data:
-  pg_data:
   hikegh_uploads:
 
 networks:

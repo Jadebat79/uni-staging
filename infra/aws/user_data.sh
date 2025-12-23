@@ -14,8 +14,8 @@ git clone https://${git_token}@${git_repo} /opt/${project_name}
 cat <<EOF > /etc/infra_config.env
 ECR_URL=${ecr_url}
 PROJECT_ROOT=/opt/${project_name}
-# Generate a random initial DB password
-ROOT_DB_PASS=$(openssl rand -hex 16)
+PROJECT_NAME=${project_name}
+OFFICE_IP=${office_ip:-}
 EOF
 
 # 4. Run Ansible

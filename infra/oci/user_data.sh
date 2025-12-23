@@ -39,6 +39,10 @@ ECR_URL=${ecr_url}
 PROJECT_ROOT=/opt/${project_name}
 OCI_AUTH_TYPE=instance_principal
 OCI_SECRET_ID=<PASTE_YOUR_REAL_OCID_HERE_OR_PASS_VIA_VAR>
+OCI_REGION=${region}
+OCI_TENANCY_OCID=${tenancy_ocid}
+OCI_COMPARTMENT_OCID=${compartment_ocid}
+OCI_LOG_ID=${log_id}
 EOF
 
 ansible-playbook playbook.yml

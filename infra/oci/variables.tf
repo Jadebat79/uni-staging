@@ -5,7 +5,7 @@ variable "private_key" { sensitive = true }
 variable "region" { default = "" }
 variable "compartment_ocid" {}
 
-variable "project_name" { default = "universal-staging" }
+variable "project_name" { default = "staging" }
 variable "ssh_public_key" { 
   description = "OCI requires an SSH key for the 'ubuntu' user"
 }

@@ -46,6 +46,9 @@ resource "oci_core_instance" "server" {
       ecr_url      = "${var.region}.ocir.io/${data.oci_objectstorage_namespace.ns.namespace}"
       project_name = var.project_name
       region       = var.region
+      tenancy_ocid    = var.tenancy_ocid
+      compartment_ocid = var.compartment_ocid
+      log_id          = oci_logging_log.staging_containers.id
     }))
   }
 }

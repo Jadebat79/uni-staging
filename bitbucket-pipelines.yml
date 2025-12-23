@@ -1,0 +1,54 @@
+# Bitbucket Pipelines Configuration
+# This pipeline triggers when orchestration files change and updates the staging server
+
+image: atlassian/default-image:3
+
+pipelines:
+  branches:
+    main:
+      - step:
+          name: Update Staging Server
+          deployment: staging
+          caches:
+            - pip
+          script:
+            # Install AWS CLI
+            - pip install --user awscli
+            - export PATH=$PATH:~/.local/bin
+            
+            # Configure AWS credentials (set these in Bitbucket Repository Settings > Pipelines > Repository variables)
+            - export AWS_ACCESS_KEY_ID=$AWS_ACCESS_KEY_ID
+            - export AWS_SECRET_ACCESS_KEY=$AWS_SECRET_ACCESS_KEY
+            - export AWS_DEFAULT_REGION=$AWS_REGION
+            
+            # Check if orchestration files changed
+            - |
+              if git diff $BITBUCKET_COMMIT~1 $BITBUCKET_COMMIT --name-only | grep -q "orchestration/"; then
+                echo "✅ Orchestration files changed, updating server..."
+                
+                # Send command to EC2 instance via AWS SSM
+                aws ssm send-command \
+                  --instance-ids "$EC2_INSTANCE_ID" \
+                  --document-name "AWS-RunShellScript" \
+                  --parameters 'commands=[
+                    "cd /opt/'$PROJECT_NAME'",
+                    "git pull origin main",
+                    "cd orchestration",
+                    "docker compose pull",
+                    "docker compose up -d --remove-orphans"
+                  ]' \
+                  --comment "Auto-update from Bitbucket Pipeline - Commit: $BITBUCKET_COMMIT" \
+                  --region "$AWS_REGION" \
+                  --output text
+                
+                echo "✅ Update command sent to server successfully"
+              else
+                echo "ℹ️  No orchestration changes detected, skipping server update"
+              fi
+
+# Required Bitbucket Repository Variables (set in Repository Settings > Pipelines > Repository variables):
+# - AWS_ACCESS_KEY_ID: AWS access key for SSM access
+# - AWS_SECRET_ACCESS_KEY: AWS secret key
+# - AWS_REGION: AWS region (e.g., us-east-1)
+# - EC2_INSTANCE_ID: The EC2 instance ID to update
+# - PROJECT_NAME: Project name (default: staging)
