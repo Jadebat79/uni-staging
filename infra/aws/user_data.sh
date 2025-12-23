@@ -15,7 +15,7 @@ cat <<EOF > /etc/infra_config.env
 ECR_URL=${ecr_url}
 PROJECT_ROOT=/opt/${project_name}
 PROJECT_NAME=${project_name}
-OFFICE_IP=${office_ip:-}
+OFFICE_IP=${office_ip}
 EOF
 
 # 4. Run Ansible
