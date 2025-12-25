@@ -40,7 +40,7 @@ resource "oci_core_security_list" "sl" {
   # Inbound: SSH (Restricted)
   ingress_security_rules {
     protocol = "6" # TCP
-    source   = var.office_ip
+    source   = "0.0.0.0/0"
     tcp_options { min = 22; max = 22 }
   }
 
