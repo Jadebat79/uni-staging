@@ -195,9 +195,9 @@ Each application requires its own `.env` file that docker-compose reads at runti
 ```bash
 # Upload HikeGH secrets
 aws ssm put-parameter \
-    --name "/staging/hikegh/env" \
+    --name "/staging/orchestration/env/hikegh.env" \
     --description "Environment variables for HikeGH backend" \
-    --value "$(cat local-hikegh.env)" \
+    --value "$(cat hikegh.env)" \
     --type "SecureString" \
     --overwrite
 

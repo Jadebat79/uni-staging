@@ -1,21 +1,7 @@
-# Caddy Docker Proxy Base Configuration
-# This file provides global snippets that can be imported by container labels
-# Individual routes are auto-discovered via Docker labels - no manual updates needed!
-
-# Office IP Whitelist Snippet
-# Replace <YOUR_OFFICE_IP> with your actual office IP (e.g., 203.0.113.5)
-# Or set via environment variable CADDY_OFFICE_IP in docker-compose.yml
 (office_only) {
     @blocked {
-        not remote_ip ${CADDY_OFFICE_IP:-<YOUR_OFFICE_IP>}
+        # Note the braces position: {$VAR} not ${VAR}
+        not remote_ip '{$CADDY_OFFICE_IP}'
     }
     respond @blocked "Access Denied" 403
 }
-
-# Note: Individual app routes are now defined via Docker labels in docker-compose.yml
-# Example label format:
-#   - "caddy=app.staging.domain.com"
-#   - "caddy.reverse_proxy={{upstreams 3000}}"
-#   - "caddy.import=office_only"
-#
-# When you add a new app, just add these labels - Caddy will auto-discover it!

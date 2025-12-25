@@ -13,12 +13,20 @@ services:
       - caddy_data:/data
     environment:
       - CADDY_INGRESS_NETWORKS=staging-net
-      # Office IP for IP whitelist (set via environment variable or Caddyfile)
-      - CADDY_OFFICE_IP=${OFFICE_IP:-}
+      - CADDY_DOCKER_CADDYFILE_PATH=/etc/caddy/Caddyfile
+      - CADDY_OFFICE_IP=${OFFICE_IP:-0.0.0./0}
     networks:
       - staging-net
     healthcheck:
-      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:2019/config/"]
+      test:
+        [
+          "CMD",
+          "wget",
+          "--quiet",
+          "--tries=1",
+          "--spider",
+          "http://localhost:2019/config/",
+        ]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -30,10 +38,9 @@ services:
         max-file: "3"
 
   # --- Application Services ---
-  # Caddy Docker Proxy automatically discovers containers via labels
-  # No manual Caddyfile updates needed when adding new apps!
+
   app1:
-    image: ${ECR_URL}/hikegh-backend:${HIKEGH_TAG:-latest}
+    image: ${ECR_URL}/aris-backend-dev:${HIKEGH_TAG:-latest}
     container_name: hikegh_backend
     env_file: ./env/hikegh.env
     command: uvicorn app.main:app --host 0.0.0.0 --port 8000
@@ -42,9 +49,9 @@ services:
     networks: [staging-net]
     labels:
       # Caddy auto-discovery labels
-      - "caddy=api.staging.${DOMAIN_NAME:-teamcanvas.site}"
-      - "caddy.reverse_proxy={{upstreams 8000}}"
-      - "caddy.import=office_only"  # Apply IP whitelist
+      caddy: api.staging.${DOMAIN_NAME:-teamcanvas.site}
+      caddy.import: office_only
+      caddy.reverse_proxy: "{{upstreams 8000}}" # Apply IP whitelist
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
       interval: 30s
@@ -57,28 +64,28 @@ services:
         max-size: "10m"
         max-file: "3"
 
-  app2:
-    image: ${ECR_URL}/staging/app2:${APP2_TAG:-latest}
-    container_name: app2
-    env_file: ./env/app2.env
-    networks: [staging-net]
-    labels:
-      # Caddy auto-discovery labels
-      - "caddy=ussd.staging.${DOMAIN_NAME:-teamcanvas.site}"
-      - "caddy.reverse_proxy={{upstreams 3000}}"
-      - "caddy.import=office_only"  # Apply IP whitelist
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:3000/health"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 40s
-    logging:
-      driver: "json-file"
-      options:
-        max-size: "10m"
-        max-file: "3"
-  
+  # app2:
+  #   image: ${ECR_URL}/staging/app2:${APP2_TAG:-latest}
+  #   container_name: app2
+  #   env_file: ./env/app2.env
+  #   networks: [staging-net]
+  #   labels:
+  #     # Caddy auto-discovery labels
+  #     - "caddy=ussd.staging.${DOMAIN_NAME:-teamcanvas.site}"
+  #     - "caddy.reverse_proxy={{upstreams 3000}}"
+  #     - "caddy.import=office_only" # Apply IP whitelist
+  #   healthcheck:
+  #     test: ["CMD", "curl", "-f", "http://localhost:3000/health"]
+  #     interval: 30s
+  #     timeout: 10s
+  #     retries: 3
+  #     start_period: 40s
+  #   logging:
+  #     driver: "json-file"
+  #     options:
+  #       max-size: "10m"
+  #       max-file: "3"
+
   # --- Log Aggregation (Fluent Bit) ---
   fluent-bit:
     image: fluent/fluent-bit:latest
@@ -114,26 +121,18 @@ services:
     container_name: dozzle
     restart: always
     volumes:
-      - /var/run/docker.sock:/var/run/docker.sock
+      - /var/run/docker.sock:/var/run/docker.sock:ro
     networks:
       - staging-net
     environment:
       DOZZLE_LEVEL: info
       DOZZLE_TAIL: 100
-      # Optional: Simple password protection on top of IP whitelist
-      # DOZZLE_USERNAME: admin
-      # DOZZLE_PASSWORD: ${ROOT_DB_PASS}
     labels:
       # Caddy auto-discovery labels
-      - "caddy=logs.staging.${DOMAIN_NAME:-teamcanvas.site}"
-      - "caddy.reverse_proxy={{upstreams 8080}}"
-      - "caddy.import=office_only"  # Apply IP whitelist
-    healthcheck:
-      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:8080/"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 10s
+      caddy: logs.staging.teamcanvas.site
+      caddy.import: office_only
+      # Tell Caddy to send traffic to port 8080 (Dozzle's default), not 80
+      caddy.reverse_proxy: "{{upstreams 8080}}"
     logging:
       driver: "json-file"
       options:
@@ -146,3 +145,5 @@ volumes:
 
 networks:
   staging-net:
+    name: staging-net   # <--- ADD THIS LINE
+    driver: bridge

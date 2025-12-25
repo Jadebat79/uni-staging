@@ -27,7 +27,7 @@
     # Load apps configuration
     apps_config: "{{ lookup('file', project_root + '/config/apps-config.yml') | from_yaml | default({'apps': []}, true) }}"
     # Project name for SSM paths (default to 'staging', can be overridden)
-    project_name: "{{ lookup('ini', 'PROJECT_NAME type=properties file=/etc/infra_config.env') | default('staging', true) }}" 
+    project_name: "{{ lookup('ini', 'PROJECT_NAME type=properties file=/etc/infra_config.env') | default('staging', true) }}"
 
   tasks:
     # --- 1. SYSTEM PRE-REQUISITES ---
@@ -58,13 +58,13 @@
       file:
         path: /etc/apt/keyrings
         state: directory
-        mode: '0755'
+        mode: "0755"
 
     - name: Add Docker GPG Key
       get_url:
         url: https://download.docker.com/linux/ubuntu/gpg
         dest: /etc/apt/keyrings/docker.asc
-        mode: '0644'
+        mode: "0644"
 
     - name: Add Docker Repository
       apt_repository:
@@ -74,7 +74,14 @@
 
     - name: Install Docker Engine
       apt:
-        pkg: [docker-ce, docker-ce-cli, containerd.io, docker-buildx-plugin, docker-compose-plugin]
+        pkg:
+          [
+            docker-ce,
+            docker-ce-cli,
+            containerd.io,
+            docker-buildx-plugin,
+            docker-compose-plugin,
+          ]
         state: present
         update_cache: yes
 
@@ -100,34 +107,34 @@
         state: directory
         owner: deploy
         group: deploy
-        mode: '0700'
+        mode: "0700"
 
     - name: Add deploy user to sudoers (passwordless for deployment tasks)
       lineinfile:
         path: /etc/sudoers.d/deploy
         line: "deploy ALL=(ALL) NOPASSWD: /usr/bin/docker, /usr/bin/docker-compose, /usr/local/bin/docker-compose"
         create: yes
-        mode: '0440'
-        validate: 'visudo -cf %s'
+        mode: "0440"
+        validate: "visudo -cf %s"
 
     # --- 3.6. SSH SECURITY HARDENING ---
     - name: Disable root login via SSH
       lineinfile:
         path: /etc/ssh/sshd_config
-        regexp: '^#?PermitRootLogin'
-        line: 'PermitRootLogin no'
+        regexp: "^#?PermitRootLogin"
+        line: "PermitRootLogin no"
         backup: yes
 
     - name: Disable password authentication (SSH keys only)
       lineinfile:
         path: /etc/ssh/sshd_config
-        regexp: '^#?PasswordAuthentication'
-        line: 'PasswordAuthentication no'
+        regexp: "^#?PasswordAuthentication"
+        line: "PasswordAuthentication no"
         backup: yes
 
     - name: Restart SSH service
       service:
-        name: sshd
+        name: ssh
         state: restarted
         enabled: yes
 
@@ -142,25 +149,25 @@
         direction: "{{ item.direction }}"
         policy: "{{ item.policy }}"
       loop:
-        - { direction: 'incoming', policy: 'deny' }
-        - { direction: 'outgoing', policy: 'allow' }
+        - { direction: "incoming", policy: "deny" }
+        - { direction: "outgoing", policy: "allow" }
 
     - name: Allow HTTP
       ufw:
         rule: allow
-        port: '80'
+        port: "80"
         proto: tcp
 
     - name: Allow HTTPS
       ufw:
         rule: allow
-        port: '443'
+        port: "443"
         proto: tcp
 
     - name: Allow SSH (OCI only)
       ufw:
         rule: allow
-        port: '22'
+        port: "22"
         proto: tcp
       when: is_oci | bool
 
@@ -175,7 +182,7 @@
       file:
         path: /etc/docker
         state: directory
-        mode: '0755'
+        mode: "0755"
 
     - name: Configure Docker log rotation in daemon.json
       copy:
@@ -188,28 +195,82 @@
             }
           }
         dest: /etc/docker/daemon.json
-        mode: '0644'
+        mode: "0644"
       notify: restart docker
 
-    # --- 3.9. AWS SSM AGENT VERIFICATION ---
-    - name: Check if SSM agent is installed
-      stat:
-        path: /usr/bin/amazon-ssm-agent
-      register: ssm_agent_check
+    # # --- 3.9. AWS SSM AGENT VERIFICATION ---
 
-    - name: Install SSM agent if missing (Ubuntu)
-      apt:
-        name: amazon-ssm-agent
-        state: present
-        update_cache: yes
-      when: not ssm_agent_check.stat.exists
+    # # 1. Check if installed via Snap (Default on Ubuntu)
+    # - name: Check if SSM agent is installed via Snap
+    #   command: snap list amazon-ssm-agent
+    #   register: snap_check
+    #   failed_when: false
+    #   changed_when: false
+    #   when: is_aws | bool
 
-    - name: Ensure SSM agent is running
-      service:
-        name: amazon-ssm-agent
-        state: started
-        enabled: yes
-      when: is_aws | bool
+    # # 2. Case A: If Snap is present, ensure it is running
+    # - name: Ensure Snap SSM agent is started
+    #   service:
+    #     name: snap.amazon-ssm-agent.amazon-ssm-agent
+    #     state: started
+    #     enabled: yes
+    #   when:
+    #     - is_aws | bool
+    #     - snap_check.rc == 0
+    #   failed_when: false # Ignore if service name differs slightly
+
+    # # 3. Case B: If Snap is MISSING, check if standard service exists
+    # - name: Check if standard SSM agent is active
+    #   command: systemctl is-active amazon-ssm-agent
+    #   register: standard_ssm_status
+    #   failed_when: false
+    #   changed_when: false
+    #   check_mode: no
+    #   when:
+    #     - is_aws | bool
+    #     - snap_check.rc != 0
+
+    # # 4. Case B: Download .deb ONLY if neither Snap nor Standard version exists
+    # - name: Download SSM Agent
+    #   get_url:
+    #     url: https://s3.amazonaws.com/ec2-downloads-windows/SSMAgent/latest/debian_amd64/amazon-ssm-agent.deb
+    #     dest: /tmp/amazon-ssm-agent.deb
+    #     mode: '0644'
+    #   when:
+    #     - is_aws | bool
+    #     - snap_check.rc != 0
+    #     - standard_ssm_status.rc != 0
+
+    # # 5. Case B: Install .deb
+    # - name: Install SSM Agent (.deb)
+    #   apt:
+    #     deb: /tmp/amazon-ssm-agent.deb
+    #     state: present
+    #   when:
+    #     - is_aws | bool
+    #     - snap_check.rc != 0
+    #     - standard_ssm_status.rc != 0
+
+    # # 6. Case B: Cleanup
+    # - name: Remove temporary installer
+    #   file:
+    #     path: /tmp/amazon-ssm-agent.deb
+    #     state: absent
+    #   when:
+    #     - is_aws | bool
+    #     - snap_check.rc != 0
+    #     - standard_ssm_status.rc != 0
+
+    # # 7. Case B: Start standard service
+    # - name: Ensure Standard SSM agent is enabled and started
+    #   systemd:
+    #     name: amazon-ssm-agent
+    #     state: started
+    #     enabled: yes
+    #     daemon_reload: yes
+    #   when:
+    #     - is_aws | bool
+    #     - snap_check.rc != 0
 
     # --- 4. ORCHESTRATION SETUP ---
     - name: Create Directories
@@ -245,93 +306,116 @@
     - name: Update Caddyfile Office IP Placeholder
       replace:
         path: "{{ project_root }}/orchestration/Caddyfile"
-        regexp: '<YOUR_OFFICE_IP>'
+        regexp: "<YOUR_OFFICE_IP>"
         replace: "{{ lookup('ini', 'OFFICE_IP type=properties file=/etc/infra_config.env') | default('CHANGE_ME', true) }}"
       # Note: Office IP should be set in /etc/infra_config.env or Terraform variables
-      failed_when: false  # Don't fail if placeholder not found
+      failed_when: false # Don't fail if placeholder not found
 
     # --- 6. FETCH APPLICATION SECRETS FROM SSM/OCI VAULT ---
-    # This section fetches secrets for each app and writes them to .env files
-    # Secrets must be uploaded to SSM/OCI Vault before running this playbook
-    
     - name: Check if apps are configured
       debug:
         msg: "Found {{ apps_config.apps | length }} app(s) to fetch secrets for: {{ apps_config.apps | map(attribute='name') | join(', ') }}"
       when: apps_config.apps | length > 0
 
+    # -------------------------------------------------------
+    # AWS IMPLEMENTATION (Unrolled Block)
+    # -------------------------------------------------------
     - name: Fetch secrets from AWS SSM Parameter Store
+      shell: |
+        aws ssm get-parameter \
+          --name "/{{ project_name }}/{{ item.name }}/env" \
+          --with-decryption \
+          --query 'Parameter.Value' \
+          --output text \
+          --region {{ aws_region }}
+      loop: "{{ apps_config.apps }}"
+      loop_control:
+        label: "{{ item.name }}"
+      register: ssm_secrets
       when: is_aws | bool and apps_config.apps | length > 0
-      loop: "{{ apps_config.apps }}"
+      no_log: true
+      failed_when: false
+      changed_when: false
+
+    - name: Write .env file for apps (AWS)
+      copy:
+        content: "{{ item.stdout }}"
+        dest: "{{ project_root }}/orchestration/env/{{ item.item.name }}.env"
+        owner: deploy
+        group: deploy
+        mode: "0600"
+      loop: "{{ ssm_secrets.results }}"
       loop_control:
-        label: "{{ item.name }}"
-      block:
-        - name: Fetch secret for {{ item.name }} from SSM
-          shell: |
-            aws ssm get-parameter \
-              --name "/{{ project_name }}/{{ item.name }}/env" \
-              --with-decryption \
-              --query 'Parameter.Value' \
-              --output text \
-              --region {{ aws_region }}
-          register: secret_result
-          no_log: true  # Don't log secret values
-          failed_when: false
-          changed_when: false
+        label: "{{ item.item.name }}"
+      when:
+        - is_aws | bool
+        - item.rc is defined
+        - item.rc == 0
+      no_log: true
 
-        - name: Write .env file for {{ item.name }}
-          copy:
-            content: "{{ secret_result.stdout }}"
-            dest: "{{ project_root }}/orchestration/env/{{ item.name }}.env"
-            owner: deploy
-            group: deploy
-            mode: "0600"
-          when: secret_result.rc == 0
-          no_log: true
+    - name: Warn if secret not found (AWS)
+      debug:
+        msg: "WARNING: Secret /{{ project_name }}/{{ item.item.name }}/env not found in SSM. Skipping .env file creation. Upload it manually or the app will fail to start."
+      loop: "{{ ssm_secrets.results }}"
+      loop_control:
+        label: "{{ item.item.name }}"
+      when:
+        - is_aws | bool
+        - item.rc is defined
+        - item.rc != 0
 
-        - name: Warn if secret not found for {{ item.name }}
-          debug:
-            msg: "WARNING: Secret /{{ project_name }}/{{ item.name }}/env not found in SSM. Skipping .env file creation. Upload it manually or the app will fail to start."
-          when: secret_result.rc != 0
-
+    # -------------------------------------------------------
+    # OCI IMPLEMENTATION (Unrolled Block)
+    # -------------------------------------------------------
     - name: Fetch secrets from OCI Vault
-      when: is_oci | bool and apps_config.apps | length > 0
+      shell: |
+        oci secrets secret-bundle get \
+          --secret-id "{{ lookup('ini', 'OCI_SECRET_' + item.name.upper() + '_OCID type=properties file=/etc/infra_config.env') }}" \
+          --auth instance_principal \
+          --query 'data."secret-bundle-content".content' \
+          --raw-output | base64 -d
       loop: "{{ apps_config.apps }}"
       loop_control:
         label: "{{ item.name }}"
-      block:
-        - name: Check if OCI secret ID pattern is configured
-          set_fact:
-            # OCI Vault secret naming pattern: {project_name}-{app_name}-env
-            # You may need to adjust this based on your OCI Vault structure
-            oci_secret_ocid: "{{ lookup('ini', 'OCI_SECRET_' + item.name.upper() + '_OCID type=properties file=/etc/infra_config.env', default='') }}"
-        
-        - name: Fetch secret from OCI Vault for {{ item.name }}
-          shell: |
-            oci secrets secret-bundle get \
-              --secret-id "{{ oci_secret_ocid }}" \
-              --auth instance_principal \
-              --query 'data."secret-bundle-content".content' \
-              --raw-output | base64 -d
-          register: secret_result
-          no_log: true
-          failed_when: false
-          changed_when: false
-          when: oci_secret_ocid != ""
+      register: oci_secrets
+      vars:
+        # Check if the secret ID exists before running
+        secret_id: "{{ lookup('ini', 'OCI_SECRET_' + item.name.upper() + '_OCID type=properties file=/etc/infra_config.env') }}"
+      when:
+        - is_oci | bool
+        - apps_config.apps | length > 0
+        - secret_id | length > 0
+      no_log: true
+      failed_when: false
+      changed_when: false
 
-        - name: Write .env file for {{ item.name }} (OCI)
-          copy:
-            content: "{{ secret_result.stdout }}"
-            dest: "{{ project_root }}/orchestration/env/{{ item.name }}.env"
-            owner: deploy
-            group: deploy
-            mode: "0600"
-          when: secret_result.rc == 0 and oci_secret_ocid != ""
-          no_log: true
+    - name: Write .env file for apps (OCI)
+      copy:
+        content: "{{ item.stdout }}"
+        dest: "{{ project_root }}/orchestration/env/{{ item.item.name }}.env"
+        owner: deploy
+        group: deploy
+        mode: "0600"
+      loop: "{{ oci_secrets.results }}"
+      loop_control:
+        label: "{{ item.item.name }}"
+      when:
+        - is_oci | bool
+        - item.skipped is not defined
+        - item.rc == 0
+      no_log: true
 
-        - name: Warn if OCI secret OCID not configured for {{ item.name }}
-          debug:
-            msg: "WARNING: OCI_SECRET_{{ item.name.upper() }}_OCID not found in /etc/infra_config.env. Skipping .env file creation."
-          when: oci_secret_ocid == ""
+    - name: Warn if OCI secret OCID not configured
+      debug:
+        msg: "WARNING: OCI_SECRET_{{ item.name.upper() }}_OCID not found in /etc/infra_config.env. Skipping .env file creation."
+      loop: "{{ apps_config.apps }}"
+      loop_control:
+        label: "{{ item.name }}"
+      vars:
+        secret_id: "{{ lookup('ini', 'OCI_SECRET_' + item.name.upper() + '_OCID type=properties file=/etc/infra_config.env') }}"
+      when:
+        - is_oci | bool
+        - secret_id | length == 0
 
     # --- 7. AUTHENTICATION & STARTUP ---
     - name: Login to AWS ECR

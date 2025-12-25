@@ -36,7 +36,7 @@ inventory.ini
 # Environment variables files (CRITICAL: Contains secrets)
 *.env
 .env
-orchestration/env/*.env
+
 
 # Docker log files
 *.log
