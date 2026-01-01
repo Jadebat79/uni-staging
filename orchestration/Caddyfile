@@ -1,7 +1,7 @@
 (office_only) {
     @blocked {
         # Note the braces position: {$VAR} not ${VAR}
-        not remote_ip '{$CADDY_OFFICE_IP}'
+        not remote_ip {$CADDY_OFFICE_IP}
     }
     respond @blocked "Access Denied" 403
 }
