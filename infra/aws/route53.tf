@@ -10,5 +10,6 @@ resource "aws_route53_record" "staging_wildcard" {
   ttl     = "300"
   
   # This implies: "Look at the EIP resource and put its IP address here"
-  records = [aws_eip.app_eip.public_ip] 
+  records = [aws_eip.lb.public_ip] 
 }
+
