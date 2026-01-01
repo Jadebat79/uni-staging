@@ -219,7 +219,7 @@
           AWS_REGION={{ aws_region }}
           AWS_ACCOUNT_ID={{ aws_account_id }}
           # Office IP for Caddy IP whitelist
-          OFFICE_IP={{ lookup('ini', 'OFFICE_IP type=properties file=/etc/infra_config.env') | default('CHANGE_ME', true) }}
+          OFFICE_IP={{ lookup('ini', 'OFFICE_IP type=properties file=/etc/infra_config.env') | default('0.0.0.0/0', true) }}
           # Image tags (set these in /etc/infra_config.env or override in CI/CD)
           HIKEGH_BACKEND_TAG={{ lookup('ini', 'HIKEGH_BACKEND_TAG type=properties file=/etc/infra_config.env') | default('latest', true) }}
           HIKEGH_FRONTEND_TAG={{ lookup('ini', 'HIKEGH_FRONTEND_TAG type=properties file=/etc/infra_config.env') | default('latest', true) }}
