@@ -206,6 +206,11 @@
           OCI_LOG_ID={{ lookup('ini', 'OCI_LOG_ID type=properties file=/etc/infra_config.env') | default('', true) }}
           # Office IP for Caddy IP whitelist
           OFFICE_IP={{ lookup('ini', 'OFFICE_IP type=properties file=/etc/infra_config.env') | default('CHANGE_ME', true) }}
+          # Image tags (set these in /etc/infra_config.env or override in CI/CD)
+          HIKEGH_BACKEND_TAG={{ lookup('ini', 'HIKEGH_BACKEND_TAG type=properties file=/etc/infra_config.env') | default('latest', true) }}
+          HIKEGH_FRONTEND_TAG={{ lookup('ini', 'HIKEGH_FRONTEND_TAG type=properties file=/etc/infra_config.env') | default('latest', true) }}
+          GPC_BACKEND_TAG={{ lookup('ini', 'GPC_BACKEND_TAG type=properties file=/etc/infra_config.env') | default('latest', true) }}
+          GPC_FRONTEND_TAG={{ lookup('ini', 'GPC_FRONTEND_TAG type=properties file=/etc/infra_config.env') | default('latest', true) }}
         dest: "{{ project_root }}/orchestration/.env"
         owner: deploy
         group: deploy
@@ -296,7 +301,7 @@
 
     - name: Start Infrastructure (Caddy, Fluent Bit, and Dozzle - DB is external OCI Autonomous)
       shell: |
-        docker compose up -d caddy fluent-bit dozzle
+        docker compose -f docker-compose-oci.yml up -d caddy fluent-bit dozzle
       args:
         chdir: "{{ project_root }}/orchestration"
       become_user: deploy

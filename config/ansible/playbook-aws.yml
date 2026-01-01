@@ -206,6 +206,10 @@
         - "{{ project_root }}/orchestration/caddy_data"
 
     # --- 9. CONFIGURATION FIXES ---
+    - name: Extract AWS Account ID from ECR URL
+      set_fact:
+        aws_account_id: "{{ ecr_url.split('.')[0] }}"
+
     - name: Generate Production .env file
       copy:
         content: |
@@ -213,8 +217,14 @@
           ECR_URL={{ ecr_url }}
           DOMAIN_NAME={{ root_domain }}
           AWS_REGION={{ aws_region }}
+          AWS_ACCOUNT_ID={{ aws_account_id }}
           # Office IP for Caddy IP whitelist
           OFFICE_IP={{ lookup('ini', 'OFFICE_IP type=properties file=/etc/infra_config.env') | default('CHANGE_ME', true) }}
+          # Image tags (set these in /etc/infra_config.env or override in CI/CD)
+          HIKEGH_BACKEND_TAG={{ lookup('ini', 'HIKEGH_BACKEND_TAG type=properties file=/etc/infra_config.env') | default('latest', true) }}
+          HIKEGH_FRONTEND_TAG={{ lookup('ini', 'HIKEGH_FRONTEND_TAG type=properties file=/etc/infra_config.env') | default('latest', true) }}
+          GPC_BACKEND_TAG={{ lookup('ini', 'GPC_BACKEND_TAG type=properties file=/etc/infra_config.env') | default('latest', true) }}
+          GPC_FRONTEND_TAG={{ lookup('ini', 'GPC_FRONTEND_TAG type=properties file=/etc/infra_config.env') | default('latest', true) }}
         dest: "{{ project_root }}/orchestration/.env"
         owner: deploy
         group: deploy
@@ -300,7 +310,7 @@
 
     - name: Start Infrastructure (Caddy, Fluent Bit, and Dozzle - DB is external RDS)
       shell: |
-        docker compose up -d caddy fluent-bit dozzle
+        docker compose -f docker-compose-aws.yml up -d caddy fluent-bit dozzle
       args:
         chdir: "{{ project_root }}/orchestration"
       become_user: deploy

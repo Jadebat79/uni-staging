@@ -1,0 +1,204 @@
+services:
+  # --- Reverse Proxy (Caddy Docker Proxy - Auto-Discovers Containers) ---
+  caddy:
+    image: lucaslorentz/caddy-docker-proxy:latest
+    container_name: caddy
+    restart: always
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+    environment:
+      - CADDY_INGRESS_NETWORKS=staging-net
+      - CADDY_DOCKER_CADDYFILE_PATH=/etc/caddy/Caddyfile
+      - CADDY_OFFICE_IP=${OFFICE_IP:-0.0.0.0/0}
+    networks:
+      - staging-net
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "wget",
+          "--quiet",
+          "--tries=1",
+          "--spider",
+          "http://localhost:2019/config/",
+        ]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # Database Service
+  # db:
+  #   image: postgres:15-alpine
+  #   restart: always
+  #   environment:
+  #     POSTGRES_USER: ${POSTGRES_USER}
+  #     POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+  #     POSTGRES_DB: ${POSTGRES_DB}
+  #   volumes:
+  #     - postgres_data:/var/lib/postgresql/data
+  #   ports:
+  #     - "5432:5432"
+  #   networks:
+  #     - staging-net
+
+  # --- Application Services (ECR Images) ---
+
+  # hikegh_backend:
+  #   image: ${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/be-hikegh:${HIKEGH_BACKEND_TAG:-latest}
+  #   container_name: hikegh_backend
+  #   env_file: ./env/hikegh.env
+  #   command: uvicorn app.main:app --host 0.0.0.0 --port 8000
+  #   volumes:
+  #     - hikegh_uploads:/app/uploads
+  #   networks: [staging-net]
+  #   labels:
+  #     # Caddy auto-discovery labels
+  #     caddy: api.${DOMAIN_NAME:-meshlabstech.com}
+  #     caddy.import: office_only
+  #     caddy.reverse_proxy: "{{upstreams 8000}}" # Apply IP whitelist
+  #   healthcheck:
+  #     test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+  #     interval: 30s
+  #     timeout: 10s
+  #     retries: 3
+  #     start_period: 40s
+  #   logging:
+  #     driver: "json-file"
+  #     options:
+  #       max-size: "10m"
+  #       max-file: "3"
+
+  # hikegh_frontend:
+  #   image: ${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/hikegh:${HIKEGH_FRONTEND_TAG:-latest}
+  #   container_name: hikegh_frontend
+  #   env_file: ./env/hikegh_frontend.env
+  #   networks: [staging-net]
+  #   labels:
+  #     # Caddy auto-discovery labels
+  #     - "caddy=hike.staging.teamcanvas.site"
+  #     - "caddy.reverse_proxy={{upstreams 3000}}"
+  #     - "caddy.import=office_only" # Apply IP whitelist
+  #   logging:
+  #     driver: "json-file"
+  #     options:
+  #       max-size: "10m"
+  #       max-file: "3"
+
+  gpc_backend:
+    image: 805562016180.dkr.ecr.us-east-1.amazonaws.com/staging/gpc_backend:${GPC_BACKEND_TAG:-latest}
+    container_name: gpc_backend
+    env_file: ./env/gpc_backend.env
+    environment:
+      - RUN_SEED=1
+      - SEED_AFRICA=1
+      - DB_MIGRATION_LOCK_ID=424242
+      - FORWARDED_ALLOW_IPS=*
+    command: gunicorn -w 4 -b 0.0.0.0:5000 --forwarded-allow-ips="*" run:app
+    volumes:
+      - gpc_uploads:/app/uploads
+    networks: [staging-net]
+    labels:
+      # Caddy auto-discovery labels
+      - "caddy=gpc-api.staging.teamcanvas.site"
+      - "caddy.import=office_only"
+      - "caddy.reverse_proxy={{upstreams 5000}}" # Apply IP whitelist
+      - "caddy.reverse_proxy.header_up=X-Forwarded-Host {host}"
+      - "caddy.reverse_proxy.header_up=X-Forwarded-Proto {scheme}"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:5000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # gpc_frontend:
+  #   image: ${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/staging/gpc_frontend:${GPC_FRONTEND_TAG:-latest}
+  #   container_name: gpc_frontend
+  #   networks: [staging-net]
+  #   labels:
+  #     # Caddy auto-discovery labels
+  #     - "caddy=gpc.staging.teamcanvas.site"
+  #     - "caddy.reverse_proxy={{upstreams 3000}}"
+  #     - "caddy.import=office_only" # Apply IP whitelist
+  #   logging:
+  #     driver: "json-file"
+  #     options:
+  #       max-size: "10m"
+  #       max-file: "3"
+
+  # --- Log Aggregation (Fluent Bit) ---
+  fluent-bit:
+    image: fluent/fluent-bit:latest
+    container_name: fluent-bit
+    restart: always
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - /var/lib/docker/containers:/var/lib/docker/containers:ro
+      - ./fluent-bit.conf:/fluent-bit/etc/fluent-bit.conf:ro
+    networks:
+      - staging-net
+    environment:
+      - FLUENT_BIT_CONFIG_FILE=/fluent-bit/etc/fluent-bit.conf
+      - AWS_REGION=${AWS_REGION:-us-east-1}
+    healthcheck:
+      test: ["CMD", "pgrep", "fluent-bit"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # --- Log Viewer ---
+  dozzle:
+    image: amir20/dozzle:latest
+    container_name: dozzle
+    restart: always
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    networks:
+      - staging-net
+    environment:
+      DOZZLE_LEVEL: info
+      DOZZLE_TAIL: 100
+    labels:
+      # Caddy auto-discovery labels
+      caddy: logs.staging.teamcanvas.site
+      caddy.import: office_only
+      # Tell Caddy to send traffic to port 8080 (Dozzle's default), not 80
+      caddy.reverse_proxy: "{{upstreams 8080}}"
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+volumes:
+  postgres_data:
+  caddy_data:
+  hikegh_uploads:
+  gpc_uploads:
+
+networks:
+  staging-net:
+    name: staging-net
+    driver: bridge
