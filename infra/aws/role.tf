@@ -81,7 +81,7 @@ resource "aws_iam_role_policy" "cloudwatch_logs" {
   })
 }
 
-// Instance profile used by the EC2 instance
+# Instance profile used by the EC2 instance
 resource "aws_iam_instance_profile" "profile" {
   name = "${var.project_name}-profile"
   role = aws_iam_role.ssm_role.name

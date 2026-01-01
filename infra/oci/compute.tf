@@ -24,15 +24,17 @@ resource "oci_core_instance" "server" {
   metadata = {
     ssh_authorized_keys = var.ssh_public_key
     user_data = base64encode(templatefile("${path.module}/user_data.sh", {
-      git_token    = var.github_token
-      git_repo     = replace(var.github_repo_url, "https://", "")
-      # Construct OCI Registry URL: <region-code>.ocir.io/<namespace>
-      ecr_url      = "${var.region}.ocir.io/${data.oci_objectstorage_namespace.ns.namespace}"
-      project_name = var.project_name
-      region       = var.region
-      tenancy_ocid    = var.tenancy_ocid
-      compartment_ocid = var.compartment_ocid
-      log_id          = oci_logging_log.staging_containers.id
+      GIT_TOKEN       = var.github_token
+      GIT_REPO        = replace(var.github_repo_url, "https://", "")
+      PROJECT_NAME    = var.project_name
+      OCI_REGION      = var.region
+      TENANCY_OCID    = var.tenancy_ocid
+      COMPARTMENT_OCID = var.compartment_ocid
+      DOMAIN_NAME     = var.domain_name
+      OFFICE_IP       = var.office_ip
+      GHCR_TOKEN      = var.ghcr_token
+      GHCR_USERNAME   = var.ghcr_username
+      OCI_LOG_ID      = oci_logging_log.staging_containers.id
     }))
   }
 }

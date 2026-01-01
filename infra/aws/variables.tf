@@ -6,7 +6,7 @@ variable "region" {
 variable "aws_account_id" {
   description = "The AWS Account ID where ECR resides"
   type        = string
-  default = ""
+  default     = ""
 }
 
 variable "project_name" {

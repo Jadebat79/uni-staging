@@ -5,7 +5,7 @@ data "aws_route53_zone" "main" {
 
 resource "aws_route53_record" "staging_wildcard" {
   zone_id = data.aws_route53_zone.main.zone_id
-  name    = "*.staging.teamcanvas.site"  # The wildcard for all staging subdomains
+  name    = "*.staging"  # The wildcard for all staging subdomains
   type    = "A"
   ttl     = "300"
   

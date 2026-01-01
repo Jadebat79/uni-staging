@@ -9,9 +9,11 @@ resource "aws_instance" "server" {
   user_data = templatefile("${path.module}/user_data.sh", {
     git_token    = var.github_token
     git_repo     = replace(var.github_repo_url, "https://", "")
-    ecr_url      = "${var.aws_account_id}.dkr.ecr.${var.region}.amazonaws.com"
     project_name = var.project_name
-    office_ip    = var.allowed_cidr  # Use same IP as SSH whitelist, or create separate variable
+    aws_region   = var.region
+    domain_name  = var.domain_name
+    office_ip    = var.office_ip
+    ecr_url      = "${var.aws_account_id}.dkr.ecr.${var.region}.amazonaws.com"
   })
 
   tags = { 

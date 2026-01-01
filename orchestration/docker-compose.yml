@@ -14,7 +14,7 @@ services:
     environment:
       - CADDY_INGRESS_NETWORKS=staging-net
       - CADDY_DOCKER_CADDYFILE_PATH=/etc/caddy/Caddyfile
-      - CADDY_OFFICE_IP=${OFFICE_IP:-0.0.0./0}
+      - CADDY_OFFICE_IP=${OFFICE_IP:-0.0.0.0/0}
     networks:
       - staging-net
     healthcheck:
@@ -37,10 +37,26 @@ services:
         max-size: "10m"
         max-file: "3"
 
+  # [NEW] Database Service
+  db:
+    image: postgres:15-alpine
+    restart: always
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432" 
+    networks:
+      - staging-net
+
+
   # --- Application Services ---
 
-  app1:
-    image: ${ECR_URL}/aris-backend-dev:${HIKEGH_TAG:-latest}
+  hikegh_backend:
+    image: ghcr.io/jadebat79/be-hikegh:4442942bd4fdd2665969039dae4364fb0842ab0d
     container_name: hikegh_backend
     env_file: ./env/hikegh.env
     command: uvicorn app.main:app --host 0.0.0.0 --port 8000
@@ -49,7 +65,7 @@ services:
     networks: [staging-net]
     labels:
       # Caddy auto-discovery labels
-      caddy: api.staging.${DOMAIN_NAME:-teamcanvas.site}
+      caddy: api.${DOMAIN_NAME:-meshlabstech.com}
       caddy.import: office_only
       caddy.reverse_proxy: "{{upstreams 8000}}" # Apply IP whitelist
     healthcheck:
@@ -64,27 +80,81 @@ services:
         max-size: "10m"
         max-file: "3"
 
-  # app2:
-  #   image: ${ECR_URL}/staging/app2:${APP2_TAG:-latest}
-  #   container_name: app2
-  #   env_file: ./env/app2.env
-  #   networks: [staging-net]
-  #   labels:
-  #     # Caddy auto-discovery labels
-  #     - "caddy=ussd.staging.${DOMAIN_NAME:-teamcanvas.site}"
-  #     - "caddy.reverse_proxy={{upstreams 3000}}"
-  #     - "caddy.import=office_only" # Apply IP whitelist
-  #   healthcheck:
-  #     test: ["CMD", "curl", "-f", "http://localhost:3000/health"]
-  #     interval: 30s
-  #     timeout: 10s
-  #     retries: 3
-  #     start_period: 40s
-  #   logging:
-  #     driver: "json-file"
-  #     options:
-  #       max-size: "10m"
-  #       max-file: "3"
+  hikegh_frontend:
+    image: ghcr.io/jadebat79/hikegh:c39b79da2fc0f7cde3a2bd78bbda4cad266a59d9
+    container_name: hikegh_frontend
+    env_file: ./env/hikegh_frontend.env
+    networks: [staging-net]
+    labels:
+      # Caddy auto-discovery labels
+      - "caddy=hike.meshlabstech.com"
+      - "caddy.reverse_proxy={{upstreams 3000}}"
+      - "caddy.import=office_only" # Apply IP whitelist
+    # healthcheck:
+    #   test: ["CMD", "curl", "-f", "http://localhost:3000/health"]
+    #   interval: 30s
+    #   timeout: 10s
+    #   retries: 3
+    #   start_period: 40s
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+      
+  gpc_backend:
+    image: ghcr.io/jadebat79/gp-afriq:1646d95658750b4799519552b16e2d42066276d2
+    container_name: gpc_backend
+    env_file: ./env/gpc_backend.env
+    environment:
+      - RUN_SEED=1
+      - SEED_AFRICA=1
+      - DB_MIGRATION_LOCK_ID=424242
+      - FORWARDED_ALLOW_IPS=*
+    command: gunicorn -w 4 -b 0.0.0.0:5000 --forwarded-allow-ips="*" run:app
+    volumes:
+      - gpc_uploads:/app/uploads
+    networks: [staging-net]
+    labels:
+      # Caddy auto-discovery labels
+      - "caddy=gpc-api.meshlabstech.com"
+      - "caddy.import=office_only"
+      - "caddy.reverse_proxy={{upstreams 5000}}" # Apply IP whitelist
+      - "caddy.reverse_proxy.header_up=X-Forwarded-Host {host}"
+      - "caddy.reverse_proxy.header_up=X-Forwarded-Proto {scheme}"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:5000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+  
+  gpc_frontend:
+    image: ghcr.io/jadebat79/gpc-afriq-fe:c41c44b240935620a6daa57b0fb2b124ae32d857
+    container_name: gpc_frontend
+    networks: [staging-net]
+    labels:
+      # Caddy auto-discovery labels
+      - "caddy=gpc.meshlabstech.com"
+      - "caddy.reverse_proxy={{upstreams 3000}}"
+      - "caddy.import=office_only" # Apply IP whitelist
+    # healthcheck:
+    #   test: ["CMD", "curl", "-f", "http://localhost:3000/health"]
+    #   interval: 30s
+    #   timeout: 10s
+    #   retries: 3
+    #   start_period: 40s
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
 
   # --- Log Aggregation (Fluent Bit) ---
   fluent-bit:
@@ -129,7 +199,7 @@ services:
       DOZZLE_TAIL: 100
     labels:
       # Caddy auto-discovery labels
-      caddy: logs.staging.teamcanvas.site
+      caddy: logs.meshlabstech.com
       caddy.import: office_only
       # Tell Caddy to send traffic to port 8080 (Dozzle's default), not 80
       caddy.reverse_proxy: "{{upstreams 8080}}"
@@ -140,8 +210,10 @@ services:
         max-file: "3"
 
 volumes:
+  postgres_data:
   caddy_data:
   hikegh_uploads:
+  gpc_uploads:
 
 networks:
   staging-net:

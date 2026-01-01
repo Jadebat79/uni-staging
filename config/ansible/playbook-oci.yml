@@ -1,102 +1,228 @@
 ---
-- name: Provision Pure OCI Staging Box
+- name: Provision OCI Staging Box
   hosts: localhost
   connection: local
   become: true
+  handlers:
+    - name: restart docker
+      service:
+        name: docker
+        state: restarted
   vars:
     # --- CONFIGURATION ---
-    # Reads OCI-specific config from the env file
-    registry_url: "{{ lookup('ini', 'REGISTRY_URL type=properties file=/etc/infra_config.env') }}"
-    registry_user: "{{ lookup('ini', 'REGISTRY_USER type=properties file=/etc/infra_config.env') }}"
-    registry_token: "{{ lookup('ini', 'REGISTRY_TOKEN type=properties file=/etc/infra_config.env') }}"
-
     project_root: "{{ lookup('ini', 'PROJECT_ROOT type=properties file=/etc/infra_config.env') }}"
     project_name: "{{ lookup('ini', 'PROJECT_NAME type=properties file=/etc/infra_config.env') | default('staging', true) }}"
-
+    root_domain: "{{ lookup('ini', 'DOMAIN_NAME type=properties file=/etc/infra_config.env') | default('teamcanvas.site', true) }}"
+    oci_region: "{{ lookup('ini', 'OCI_REGION type=properties file=/etc/infra_config.env') | default('us-east-1', true) }}"
     # App Config
     apps_config: "{{ lookup('file', project_root + '/config/apps-config.yml') | from_yaml | default({'apps': []}, true) }}"
+    # GHCR credentials
+    ghcr_token: "{{ lookup('ini', 'GHCR_TOKEN type=properties file=/etc/infra_config.env') }}"
+    ghcr_username: "{{ lookup('ini', 'GHCR_USERNAME type=properties file=/etc/infra_config.env') }}"
 
   tasks:
-    # --- 1. SYSTEM BASICS ---
-    - name: Install Dependencies
+    # --- 1. SYSTEM PRE-REQUISITES ---
+    - name: Install System Dependencies
       apt:
-        # Added gnupg here explicitly because the Docker step needs it
-        pkg:
-          [
-            curl,
-            unzip,
-            python3-pip,
-            acl,
-            python3-venv,
-            gnupg,
-            lsb-release,
-            ca-certificates,
-          ]
+        pkg: [ca-certificates, curl, gnupg, unzip, python3-pip, acl, lsb-release]
         state: present
         update_cache: yes
 
-    # --- 2. INSTALL DOCKER (Deterministic) ---
-    - name: Ensure /etc/apt/keyrings exists
+    # --- 2. INSTALL DOCKER ---
+    - name: Create Keyring Directory
       file:
         path: /etc/apt/keyrings
         state: directory
         mode: "0755"
 
-    - name: Add Docker GPG key (dearmored keyring)
-      shell: |
-        set -e
-        curl -fsSL https://download.docker.com/linux/ubuntu/gpg | gpg --dearmor -o /etc/apt/keyrings/docker.gpg
-        chmod a+r /etc/apt/keyrings/docker.gpg
-      args:
-        creates: /etc/apt/keyrings/docker.gpg
+    - name: Add Docker GPG Key
+      get_url:
+        url: https://download.docker.com/linux/ubuntu/gpg
+        dest: /etc/apt/keyrings/docker.asc
+        mode: "0644"
+        force: true
 
-    - name: Determine Docker repo arch
+    - name: Get System Architecture for Docker
       set_fact:
-        docker_arch: >-
-          {{ 'amd64' if ansible_facts['architecture'] in ['x86_64','amd64'] else
-             'arm64' if ansible_facts['architecture'] in ['aarch64','arm64'] else
-             ansible_facts['architecture'] }}
+        docker_arch: "{{ 'amd64' if ansible_architecture == 'x86_64' else 'arm64' }}"
 
-    - name: Add Docker repository
+    - name: Add Docker Repository
       apt_repository:
-        repo: "deb [arch={{ docker_arch }} signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/ubuntu {{ ansible_facts['distribution_release'] }} stable"
-        state: present
+        # Dynamically selects amd64 (Intel) or arm64 (OCI Ampere)
+        repo: "deb [arch={{ docker_arch }} signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/ubuntu {{ ansible_facts['distribution_release'] }} stable"
         filename: docker
-
-    - name: Update apt cache after adding Docker repo
-      apt:
+        state: present
         update_cache: yes
-        # Force update even if cache looks fresh, to ensure we see the new docker repo
-        cache_valid_time: 0
 
     - name: Install Docker Engine
       apt:
-        name:
+        pkg:
           - docker-ce
           - docker-ce-cli
           - containerd.io
           - docker-buildx-plugin
           - docker-compose-plugin
         state: present
+        update_cache: yes
 
     - name: Start Docker Service
-      service:
-        name: docker
-        state: started
+      service: 
+        name: docker 
+        state: started 
         enabled: yes
 
     - name: Add ubuntu user to docker group
-      user:
-        name: ubuntu
-        groups: docker
+      user: 
+        name: ubuntu 
+        groups: docker 
         append: yes
 
-    # --- 3. OCI SECRETS (Using Instance Principal) ---
-    - name: Create Env Directory
+    # --- 3. CREATE DEPLOY USER ---
+    - name: Create deploy user
+      user:
+        name: deploy
+        groups: docker,sudo
+        shell: /bin/bash
+        create_home: yes
+        home: /home/deploy
+        comment: "Deployment user for staging environment"
+
+    - name: Set up deploy user SSH directory
       file:
-        path: "{{ project_root }}/orchestration/env"
+        path: /home/deploy/.ssh
+        state: directory
+        owner: deploy
+        group: deploy
+        mode: "0700"
+
+    - name: Add deploy user to sudoers (passwordless for deployment tasks)
+      lineinfile:
+        path: /etc/sudoers.d/deploy
+        line: "deploy ALL=(ALL) NOPASSWD: /usr/bin/docker, /usr/bin/docker-compose, /usr/local/bin/docker-compose"
+        create: yes
+        mode: "0440"
+        validate: "visudo -cf %s"
+
+    # --- 4. SSH SECURITY HARDENING ---
+    - name: Disable root login via SSH
+      lineinfile:
+        path: /etc/ssh/sshd_config
+        regexp: "^#?PermitRootLogin"
+        line: "PermitRootLogin no"
+        backup: yes
+
+    - name: Disable password authentication (SSH keys only)
+      lineinfile:
+        path: /etc/ssh/sshd_config
+        regexp: "^#?PasswordAuthentication"
+        line: "PasswordAuthentication no"
+        backup: yes
+
+    - name: Restart SSH service
+      service:
+        name: ssh
+        state: restarted
+        enabled: yes
+
+    # --- 5. FIREWALL CONFIGURATION (UFW) ---
+    - name: Install UFW
+      apt:
+        name: ufw
+        state: present
+
+    - name: Set UFW default policies
+      ufw:
+        direction: "{{ item.direction }}"
+        policy: "{{ item.policy }}"
+      loop:
+        - { direction: "incoming", policy: "deny" }
+        - { direction: "outgoing", policy: "allow" }
+
+    - name: Allow HTTP
+      ufw:
+        rule: allow
+        port: "80"
+        proto: tcp
+
+    - name: Allow HTTPS
+      ufw:
+        rule: allow
+        port: "443"
+        proto: tcp
+
+    - name: Allow SSH
+      ufw:
+        rule: allow
+        port: "22"
+        proto: tcp
+
+    - name: Enable UFW
+      ufw:
+        state: enabled
+
+    # --- 6. DOCKER LOG ROTATION CONFIGURATION ---
+    - name: Create Docker daemon.json directory
+      file:
+        path: /etc/docker
         state: directory
         mode: "0755"
+
+    - name: Configure Docker log rotation in daemon.json
+      copy:
+        content: |
+          {
+            "log-driver": "json-file",
+            "log-opts": {
+              "max-size": "10m",
+              "max-file": "3"
+            }
+          }
+        dest: /etc/docker/daemon.json
+        mode: "0644"
+      notify: restart docker
+
+    # --- 7. ORCHESTRATION SETUP ---
+    - name: Create Directories
+      file:
+        path: "{{ item }}"
+        state: directory
+        mode: "0755"
+        owner: deploy
+        group: deploy
+      loop:
+        - "{{ project_root }}/orchestration/env"
+        - "{{ project_root }}/orchestration/caddy_data"
+
+    # --- 8. CONFIGURATION FIXES ---
+    - name: Generate Production .env file
+      copy:
+        content: |
+          # Generated by Ansible
+          DOMAIN_NAME={{ root_domain }}
+          OCI_REGION={{ oci_region }}
+          # OCI Logging variables
+          OCI_TENANCY_OCID={{ lookup('ini', 'OCI_TENANCY_OCID type=properties file=/etc/infra_config.env') | default('', true) }}
+          OCI_COMPARTMENT_OCID={{ lookup('ini', 'OCI_COMPARTMENT_OCID type=properties file=/etc/infra_config.env') | default('', true) }}
+          OCI_LOG_ID={{ lookup('ini', 'OCI_LOG_ID type=properties file=/etc/infra_config.env') | default('', true) }}
+          # Office IP for Caddy IP whitelist
+          OFFICE_IP={{ lookup('ini', 'OFFICE_IP type=properties file=/etc/infra_config.env') | default('CHANGE_ME', true) }}
+        dest: "{{ project_root }}/orchestration/.env"
+        owner: deploy
+        group: deploy
+        mode: "0600"
+
+    - name: Update Caddyfile Office IP Placeholder
+      replace:
+        path: "{{ project_root }}/orchestration/Caddyfile"
+        regexp: "<YOUR_OFFICE_IP>"
+        replace: "{{ lookup('ini', 'OFFICE_IP type=properties file=/etc/infra_config.env') | default('CHANGE_ME', true) }}"
+      failed_when: false # Don't fail if placeholder not found
+
+    # --- 9. FETCH APPLICATION SECRETS FROM OCI VAULT ---
+    - name: Check if apps are configured
+      debug:
+        msg: "Found {{ apps_config.apps | length }} app(s) to fetch secrets for: {{ apps_config.apps | map(attribute='name') | join(', ') }}"
+      when: apps_config.apps | length > 0
 
     - name: Fetch Secrets from OCI Vault
       shell: |
@@ -106,23 +232,71 @@
           --query 'data."secret-bundle-content".content' \
           --raw-output | base64 -d
       loop: "{{ apps_config.apps }}"
+      loop_control:
+        label: "{{ item.name }}"
       register: oci_secrets
-      failed_when: false # Don't crash if a secret is missing
+      vars:
+        # Check if the secret ID exists before running
+        secret_id: "{{ lookup('ini', 'OCI_SECRET_' + item.name.upper() + '_OCID type=properties file=/etc/infra_config.env') }}"
+      when:
+        - apps_config.apps | length > 0
+        - secret_id | length > 0
+      no_log: true
+      failed_when: false
+      changed_when: false
 
-    - name: Write .env files
+    - name: Write .env file for apps
       copy:
         content: "{{ item.stdout }}"
         dest: "{{ project_root }}/orchestration/env/{{ item.item.name }}.env"
+        owner: deploy
+        group: deploy
+        mode: "0600"
       loop: "{{ oci_secrets.results }}"
-      when: item.rc == 0
+      loop_control:
+        label: "{{ item.item.name }}"
+      when:
+        - item.skipped is not defined
+        - item.rc == 0
+      no_log: true
 
-    # --- 4. STARTUP (Using OCI Registry) ---
-    # Changed from 'docker_login' module to 'shell' to avoid Python SDK dependencies
-    - name: Login to OCIR
-      shell: echo "{{ registry_token }}" | docker login --username "{{ registry_user }}" --password-stdin "{{ registry_url }}"
-      no_log: true # Keeps your token out of the logs
+    - name: Warn if OCI secret OCID not configured
+      debug:
+        msg: "WARNING: OCI_SECRET_{{ item.name.upper() }}_OCID not found in /etc/infra_config.env. Skipping .env file creation."
+      loop: "{{ apps_config.apps }}"
+      loop_control:
+        label: "{{ item.name }}"
+      vars:
+        secret_id: "{{ lookup('ini', 'OCI_SECRET_' + item.name.upper() + '_OCID type=properties file=/etc/infra_config.env') }}"
+      when:
+        - secret_id | length == 0
 
-    - name: Start Docker Compose
-      shell: docker compose up -d caddy fluent-bit dozzle
+    # --- 10. AUTHENTICATION & STARTUP ---
+    - name: Login to GitHub Container Registry (GHCR)
+      shell: |
+        echo "{{ ghcr_token }}" | docker login ghcr.io --username "{{ ghcr_username }}" --password-stdin
+      register: ghcr_login
+      retries: 3
+      delay: 5
+      until: ghcr_login.rc == 0
+      become_user: deploy
+      no_log: true
+
+    - name: Set ownership of orchestration directory to deploy user
+      file:
+        path: "{{ project_root }}/orchestration"
+        owner: deploy
+        group: deploy
+        recurse: yes
+
+    - name: Select Fluent Bit config for OCI
+      copy:
+        src: "{{ project_root }}/orchestration/fluent-bit-oci.conf"
+        dest: "{{ project_root }}/orchestration/fluent-bit.conf"
+
+    - name: Start Infrastructure (Caddy, Fluent Bit, and Dozzle - DB is external OCI Autonomous)
+      shell: |
+        docker compose up -d caddy fluent-bit dozzle
       args:
         chdir: "{{ project_root }}/orchestration"
+      become_user: deploy

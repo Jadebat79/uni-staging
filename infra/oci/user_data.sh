@@ -47,11 +47,15 @@ mkdir -p /opt/${PROJECT_NAME}/orchestration/env
 # Write the config file
 cat <<EOF > /etc/infra_config.env
 PROJECT_ROOT=/opt/${PROJECT_NAME}
+PROJECT_NAME=${PROJECT_NAME}
 OCI_AUTH_TYPE=instance_principal
 OCI_REGION=${OCI_REGION}
 OCI_TENANCY_OCID=${TENANCY_OCID}
 OCI_COMPARTMENT_OCID=${COMPARTMENT_OCID}
-OCI_SECRET_ID=${SECRET_OCID}
+DOMAIN_NAME=${DOMAIN_NAME}
+OFFICE_IP=${OFFICE_IP}
+GHCR_TOKEN=${GHCR_TOKEN}
+GHCR_USERNAME=${GHCR_USERNAME}
 EOF
 
 # 7. Run Ansible
@@ -62,6 +66,6 @@ cd /opt/${PROJECT_NAME}/config/ansible
 /opt/ansible-venv/bin/ansible-galaxy collection install -r requirements.yml || /opt/ansible-venv/bin/ansible-galaxy collection install oracle.oci
 
 # Use the VENV executable to run the playbook
-/opt/ansible-venv/bin/ansible-playbook playbook.yml
+/opt/ansible-venv/bin/ansible-playbook playbook-oci.yml
 
 echo ">>> Setup Complete!"
