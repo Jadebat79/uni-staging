@@ -3,13 +3,13 @@ data "aws_route53_zone" "main" {
   name = "teamcanvas.site." # Your root domain
 }
 
-resource "aws_route53_record" "staging_wildcard" {
-  zone_id = data.aws_route53_zone.main.zone_id
-  name    = "*.staging"  # The wildcard for all staging subdomains
-  type    = "A"
-  ttl     = "300"
+# resource "aws_route53_record" "staging_wildcard" {
+#   zone_id = data.aws_route53_zone.main.zone_id
+#   name    = "*.staging"  # The wildcard for all staging subdomains
+#   type    = "A"
+#   ttl     = "300"
   
-  # This implies: "Look at the EIP resource and put its IP address here"
-  records = [aws_eip.lb.public_ip] 
-}
+#   # This implies: "Look at the EIP resource and put its IP address here"
+#   records = [aws_eip.lb.public_ip] 
+# }
 
