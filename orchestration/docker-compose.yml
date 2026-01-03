@@ -156,35 +156,6 @@ services:
         max-file: "3"
 
 
-  # --- Log Aggregation (Fluent Bit) ---
-  fluent-bit:
-    image: fluent/fluent-bit:latest
-    container_name: fluent-bit
-    restart: always
-    volumes:
-      - /var/run/docker.sock:/var/run/docker.sock:ro
-      - /var/lib/docker/containers:/var/lib/docker/containers:ro
-      - ./fluent-bit.conf:/fluent-bit/etc/fluent-bit.conf:ro
-    networks:
-      - staging-net
-    environment:
-      - FLUENT_BIT_CONFIG_FILE=/fluent-bit/etc/fluent-bit.conf
-      - AWS_REGION=${AWS_REGION:-us-east-1}
-      - OCI_TENANCY_OCID=${OCI_TENANCY_OCID:-}
-      - OCI_COMPARTMENT_OCID=${OCI_COMPARTMENT_OCID:-}
-      - OCI_LOG_ID=${OCI_LOG_ID:-}
-    healthcheck:
-      test: ["CMD", "pgrep", "fluent-bit"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 10s
-    logging:
-      driver: "json-file"
-      options:
-        max-size: "10m"
-        max-file: "3"
-
   # --- Log Viewer ---
   dozzle:
     image: amir20/dozzle:latest

@@ -3,7 +3,6 @@
 // This file defines:
 // - IAM Role for EC2 (with SSM + ECR access)
 // - Inline policy for SSM Parameter Store reads
-// - Inline policy for CloudWatch Logs (Fluent Bit)
 // - Instance profile for attaching the role to EC2
 
 resource "aws_iam_role" "ssm_role" {
@@ -49,32 +48,6 @@ resource "aws_iam_role_policy" "ssm_parameter_read" {
         ]
         Resource = [
           "arn:aws:ssm:${var.region}:*:parameter/${var.project_name}/*",
-        ]
-      }
-    ]
-  })
-}
-
-// Inline policy: allow EC2 instance to send logs to CloudWatch Logs
-// Used by Fluent Bit to ship container logs without static credentials.
-resource "aws_iam_role_policy" "cloudwatch_logs" {
-  name = "${var.project_name}-cloudwatch-logs"
-  role = aws_iam_role.ssm_role.id
-
-  policy = jsonencode({
-    Version = "2012-10-17"
-    Statement = [
-      {
-        Effect = "Allow"
-        Action = [
-          "logs:CreateLogGroup",
-          "logs:CreateLogStream",
-          "logs:PutLogEvents",
-          "logs:DescribeLogStreams",
-        ]
-        Resource = [
-          "arn:aws:logs:${var.region}:*:log-group:/staging/*",
-          "arn:aws:logs:${var.region}:*:log-group:/staging/*:*",
         ]
       }
     ]

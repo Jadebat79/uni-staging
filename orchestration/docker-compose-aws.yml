@@ -31,11 +31,6 @@ services:
       timeout: 10s
       retries: 3
       start_period: 10s
-    logging:
-      driver: "json-file"
-      options:
-        max-size: "10m"
-        max-file: "3"
 
   # Database Service
   # db:
@@ -73,11 +68,6 @@ services:
   #     timeout: 10s
   #     retries: 3
   #     start_period: 40s
-  #   logging:
-  #     driver: "json-file"
-  #     options:
-  #       max-size: "10m"
-  #       max-file: "3"
 
   # hikegh_frontend:
   #   image: ${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/hikegh:${HIKEGH_FRONTEND_TAG:-latest}
@@ -89,11 +79,6 @@ services:
   #     - "caddy=hike.staging.teamcanvas.site"
   #     - "caddy.reverse_proxy={{upstreams 3000}}"
   #     - "caddy.import=office_only" # Apply IP whitelist
-  #   logging:
-  #     driver: "json-file"
-  #     options:
-  #       max-size: "10m"
-  #       max-file: "3"
 
   gpc_backend:
     image: 805562016180.dkr.ecr.us-east-1.amazonaws.com/staging/gpc_backend:${GPC_BACKEND_TAG:-latest}
@@ -121,11 +106,6 @@ services:
       timeout: 10s
       retries: 3
       start_period: 40s
-    logging:
-      driver: "json-file"
-      options:
-        max-size: "10m"
-        max-file: "3"
 
   # gpc_frontend:
   #   image: ${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/staging/gpc_frontend:${GPC_FRONTEND_TAG:-latest}
@@ -136,37 +116,6 @@ services:
   #     - "caddy=gpc.staging.teamcanvas.site"
   #     - "caddy.reverse_proxy={{upstreams 3000}}"
   #     - "caddy.import=office_only" # Apply IP whitelist
-  #   logging:
-  #     driver: "json-file"
-  #     options:
-  #       max-size: "10m"
-  #       max-file: "3"
-
-  # --- Log Aggregation (Fluent Bit) ---
-  fluent-bit:
-    image: fluent/fluent-bit:latest
-    container_name: fluent-bit
-    restart: always
-    volumes:
-      - /var/run/docker.sock:/var/run/docker.sock:ro
-      - /var/lib/docker/containers:/var/lib/docker/containers:ro
-      - ./fluent-bit.conf:/fluent-bit/etc/fluent-bit.conf:ro
-    networks:
-      - staging-net
-    environment:
-      - FLUENT_BIT_CONFIG_FILE=/fluent-bit/etc/fluent-bit.conf
-      - AWS_REGION=${AWS_REGION:-us-east-1}
-    healthcheck:
-      test: ["CMD", "pgrep", "fluent-bit"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 10s
-    logging:
-      driver: "json-file"
-      options:
-        max-size: "10m"
-        max-file: "3"
 
   # --- Log Viewer ---
   dozzle:
@@ -186,11 +135,6 @@ services:
       caddy.import: office_only
       # Tell Caddy to send traffic to port 8080 (Dozzle's default), not 80
       caddy.reverse_proxy: "{{upstreams 8080}}"
-    logging:
-      driver: "json-file"
-      options:
-        max-size: "10m"
-        max-file: "3"
 
 volumes:
   postgres_data:

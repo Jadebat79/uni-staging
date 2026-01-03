@@ -449,21 +449,9 @@
         group: deploy
         recurse: yes
 
-    - name: Select Fluent Bit config for AWS
-      copy:
-        src: "{{ project_root }}/orchestration/fluent-bit.conf"
-        dest: "{{ project_root }}/orchestration/fluent-bit.conf"
-      when: is_aws | bool
-
-    - name: Select Fluent Bit config for OCI
-      copy:
-        src: "{{ project_root }}/orchestration/fluent-bit-oci.conf"
-        dest: "{{ project_root }}/orchestration/fluent-bit.conf"
-      when: is_oci | bool
-
-    - name: Start Infrastructure (Caddy, Fluent Bit, and Dozzle - DB is external RDS/OCI Autonomous)
+    - name: Start Infrastructure (Caddy and Dozzle - DB is external RDS/OCI Autonomous)
       shell: |
-        docker compose up -d caddy fluent-bit dozzle
+        docker compose up -d caddy dozzle
       args:
         chdir: "{{ project_root }}/orchestration"
       become_user: deploy

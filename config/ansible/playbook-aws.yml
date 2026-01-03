@@ -1,34 +1,36 @@
 ---
-- name: Provision AWS Staging Box
+- name: Provision AWS-Native Staging Box (Stable Docker via Ubuntu repo)
   hosts: localhost
   connection: local
   become: true
+
   handlers:
     - name: restart docker
       service:
         name: docker
         state: restarted
+
+    - name: restart ssh
+      service:
+        name: ssh
+        state: restarted
+
   vars:
-    # --- CONFIGURATION (Reads from /etc/infra_config.env) ---
-    project_root: "{{ lookup('ini', 'PROJECT_ROOT type=properties file=/etc/infra_config.env') }}"
-    aws_region: "{{ lookup('ini', 'AWS_REGION type=properties file=/etc/infra_config.env') | default('us-east-1', true) }}"
-    root_domain: "{{ lookup('ini', 'DOMAIN_NAME type=properties file=/etc/infra_config.env') | default('teamcanvas.site', true) }}"
-    # Load apps configuration
-    apps_config: "{{ lookup('file', project_root + '/config/apps-config.yml') | from_yaml | default({'apps': []}, true) }}"
-    # Project name for SSM paths (default to 'staging', can be overridden)
+    infra_conf: "{{ lookup('ini', 'ECR_URL type=properties file=/etc/infra_config.env') | default('', true) }}"
+    project_root: "{{ lookup('ini', 'PROJECT_ROOT type=properties file=/etc/infra_config.env') | default('/opt/project', true) }}"
     project_name: "{{ lookup('ini', 'PROJECT_NAME type=properties file=/etc/infra_config.env') | default('staging', true) }}"
-    # ECR registry URL
-    ecr_url: "{{ lookup('ini', 'ECR_URL type=properties file=/etc/infra_config.env') }}"
+    aws_region: "{{ infra_conf.split('.')[3] if (infra_conf and 'dkr.ecr' in infra_conf) else 'us-east-1' }}"
+    root_domain: "teamcanvas.site"
+    apps_config: "{{ lookup('file', project_root + '/config/apps-config.yml') | from_yaml | default({'apps': []}, true) }}"
 
   tasks:
-    # --- 1. SYSTEM PRE-REQUISITES ---
     - name: Install System Dependencies
       apt:
         pkg: [ca-certificates, curl, gnupg, unzip, python3-pip, acl]
         state: present
         update_cache: yes
 
-    # --- 2. INSTALL AWS CLI v2 ---
+    # --- AWS CLI v2 ---
     - name: Check if AWS CLI v2 is installed
       stat:
         path: /usr/local/bin/aws
@@ -36,60 +38,51 @@
 
     - name: Download and Install AWS CLI v2
       shell: |
+        set -e
         curl "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o "/tmp/awscliv2.zip"
         unzip -o /tmp/awscliv2.zip -d /tmp
         /tmp/aws/install --update
+      args:
+        executable: /bin/bash
       when: not aws_cli_bin.stat.exists
 
-    # --- 3. INSTALL DOCKER ---
-    - name: Create Keyring Directory
+    # --- DOCKER (Ubuntu repo) ---
+    - name: Remove any Docker CE repo list (avoid docker.com apt path entirely)
       file:
-        path: /etc/apt/keyrings
-        state: directory
-        mode: "0755"
+        path: "{{ item }}"
+        state: absent
+      loop:
+        - /etc/apt/sources.list.d/docker.list
+        - /etc/apt/sources.list.d/docker.sources
+        - /etc/apt/keyrings/docker.asc
+      failed_when: false
 
-    - name: Add Docker GPG Key
-      get_url:
-        url: https://download.docker.com/linux/ubuntu/gpg
-        dest: /etc/apt/keyrings/docker.asc
-        mode: "0644"
-        force: true
-
-    - name: Get System Architecture for Docker
-      set_fact:
-        docker_arch: "{{ 'amd64' if ansible_architecture == 'x86_64' else 'arm64' }}"
-
-    - name: Add Docker Repository
-      apt_repository:
-        repo: "deb [arch={{ docker_arch }} signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/ubuntu {{ ansible_facts['distribution_release'] }} stable"
-        filename: docker
-        state: present
-        update_cache: yes
-
-    - name: Install Docker Engine
+    - name: Update apt cache
       apt:
-        pkg:
-          - docker-ce
-          - docker-ce-cli
-          - containerd.io
-          - docker-buildx-plugin
-          - docker-compose-plugin
-        state: present
         update_cache: yes
+        cache_valid_time: 0
 
-    - name: Start Docker Service
-      service: 
-        name: docker 
-        state: started 
+    - name: Install Docker from Ubuntu repo (stable)
+      apt:
+        name:
+          - docker.io
+          - docker-compose-v2
+        state: present
+
+    - name: Enable & start Docker
+      service:
+        name: docker
+        state: started
         enabled: yes
 
     - name: Add ubuntu user to docker group
-      user: 
-        name: ubuntu 
-        groups: docker 
+      user:
+        name: ubuntu
+        groups: docker
         append: yes
+      failed_when: false
 
-    # --- 4. CREATE DEPLOY USER ---
+    # --- deploy user ---
     - name: Create deploy user
       user:
         name: deploy
@@ -97,17 +90,8 @@
         shell: /bin/bash
         create_home: yes
         home: /home/deploy
-        comment: "Deployment user for staging environment"
 
-    - name: Set up deploy user SSH directory
-      file:
-        path: /home/deploy/.ssh
-        state: directory
-        owner: deploy
-        group: deploy
-        mode: "0700"
-
-    - name: Add deploy user to sudoers (passwordless for deployment tasks)
+    - name: Add deploy user to sudoers (passwordless docker)
       lineinfile:
         path: /etc/sudoers.d/deploy
         line: "deploy ALL=(ALL) NOPASSWD: /usr/bin/docker, /usr/bin/docker-compose, /usr/local/bin/docker-compose"
@@ -115,28 +99,24 @@
         mode: "0440"
         validate: "visudo -cf %s"
 
-    # --- 5. SSH SECURITY HARDENING ---
+    # --- SSH hardening ---
     - name: Disable root login via SSH
       lineinfile:
         path: /etc/ssh/sshd_config
         regexp: "^#?PermitRootLogin"
         line: "PermitRootLogin no"
         backup: yes
+      notify: restart ssh
 
-    - name: Disable password authentication (SSH keys only)
+    - name: Disable password authentication
       lineinfile:
         path: /etc/ssh/sshd_config
         regexp: "^#?PasswordAuthentication"
         line: "PasswordAuthentication no"
         backup: yes
+      notify: restart ssh
 
-    - name: Restart SSH service
-      service:
-        name: ssh
-        state: restarted
-        enabled: yes
-
-    # --- 6. FIREWALL CONFIGURATION (UFW) ---
+    # --- UFW (AWS-native: keep 22 closed if you use SSM) ---
     - name: Install UFW
       apt:
         name: ufw
@@ -150,36 +130,25 @@
         - { direction: "incoming", policy: "deny" }
         - { direction: "outgoing", policy: "allow" }
 
-    - name: Allow HTTP
+    - name: Allow HTTP/HTTPS
       ufw:
         rule: allow
-        port: "80"
+        port: "{{ item }}"
         proto: tcp
-
-    - name: Allow HTTPS
-      ufw:
-        rule: allow
-        port: "443"
-        proto: tcp
-
-    - name: Allow SSH
-      ufw:
-        rule: allow
-        port: "22"
-        proto: tcp
+      loop: ["80", "443"]
 
     - name: Enable UFW
       ufw:
         state: enabled
 
-    # --- 7. DOCKER LOG ROTATION CONFIGURATION ---
-    - name: Create Docker daemon.json directory
+    # --- Docker log rotation ---
+    - name: Ensure /etc/docker exists
       file:
         path: /etc/docker
         state: directory
         mode: "0755"
 
-    - name: Configure Docker log rotation in daemon.json
+    - name: Configure Docker log rotation
       copy:
         content: |
           {
@@ -193,8 +162,8 @@
         mode: "0644"
       notify: restart docker
 
-    # --- 8. ORCHESTRATION SETUP ---
-    - name: Create Directories
+    # --- Orchestration dirs ---
+    - name: Create orchestration directories
       file:
         path: "{{ item }}"
         state: directory
@@ -205,52 +174,39 @@
         - "{{ project_root }}/orchestration/env"
         - "{{ project_root }}/orchestration/caddy_data"
 
-    # --- 9. CONFIGURATION FIXES ---
-    - name: Extract AWS Account ID from ECR URL
-      set_fact:
-        aws_account_id: "{{ ecr_url.split('.')[0] }}"
-
-    - name: Generate Production .env file
+    # --- .env ---
+    - name: Generate orchestration .env
       copy:
         content: |
           # Generated by Ansible
-          ECR_URL={{ ecr_url }}
+          ECR_URL={{ infra_conf }}
           DOMAIN_NAME={{ root_domain }}
           AWS_REGION={{ aws_region }}
-          AWS_ACCOUNT_ID={{ aws_account_id }}
-          # Office IP for Caddy IP whitelist
-          OFFICE_IP={{ lookup('ini', 'OFFICE_IP type=properties file=/etc/infra_config.env') | default('0.0.0.0/0', true) }}
-          # Image tags (set these in /etc/infra_config.env or override in CI/CD)
-          HIKEGH_BACKEND_TAG={{ lookup('ini', 'HIKEGH_BACKEND_TAG type=properties file=/etc/infra_config.env') | default('latest', true) }}
-          HIKEGH_FRONTEND_TAG={{ lookup('ini', 'HIKEGH_FRONTEND_TAG type=properties file=/etc/infra_config.env') | default('latest', true) }}
-          GPC_BACKEND_TAG={{ lookup('ini', 'GPC_BACKEND_TAG type=properties file=/etc/infra_config.env') | default('latest', true) }}
-          GPC_FRONTEND_TAG={{ lookup('ini', 'GPC_FRONTEND_TAG type=properties file=/etc/infra_config.env') | default('latest', true) }}
+          OFFICE_IP=0.0.0.0/0
         dest: "{{ project_root }}/orchestration/.env"
         owner: deploy
         group: deploy
         mode: "0600"
 
-    - name: Update Caddyfile Office IP Placeholder
+    - name: Update Caddyfile Office IP Placeholder (if present)
       replace:
         path: "{{ project_root }}/orchestration/Caddyfile"
-        regexp: "<YOUR_OFFICE_IP>"
+        regexp: "0.0.0.0/0"
         replace: "{{ lookup('ini', 'OFFICE_IP type=properties file=/etc/infra_config.env') | default('CHANGE_ME', true) }}"
-      failed_when: false # Don't fail if placeholder not found
+      failed_when: false
 
-    # --- 10. FETCH APPLICATION SECRETS FROM SSM ---
-    - name: Check if apps are configured
-      debug:
-        msg: "Found {{ apps_config.apps | length }} app(s) to fetch secrets for: {{ apps_config.apps | map(attribute='name') | join(', ') }}"
-      when: apps_config.apps | length > 0
-
-    - name: Fetch secrets from AWS SSM Parameter Store
+    # --- SSM secrets ---
+    - name: Fetch secrets from AWS SSM
       shell: |
+        set -e
         aws ssm get-parameter \
           --name "/{{ project_name }}/{{ item.name }}/env" \
           --with-decryption \
           --query 'Parameter.Value' \
           --output text \
           --region {{ aws_region }}
+      args:
+        executable: /bin/bash
       loop: "{{ apps_config.apps }}"
       loop_control:
         label: "{{ item.name }}"
@@ -260,58 +216,45 @@
       failed_when: false
       changed_when: false
 
-    - name: Write .env file for apps
+    - name: Write .env files for apps
       copy:
         content: "{{ item.stdout }}"
         dest: "{{ project_root }}/orchestration/env/{{ item.item.name }}.env"
         owner: deploy
         group: deploy
         mode: "0600"
-      loop: "{{ ssm_secrets.results }}"
-      loop_control:
-        label: "{{ item.item.name }}"
+      loop: "{{ ssm_secrets.results | default([]) }}"
       when:
         - item.rc is defined
         - item.rc == 0
       no_log: true
 
-    - name: Warn if secret not found
-      debug:
-        msg: "WARNING: Secret /{{ project_name }}/{{ item.item.name }}/env not found in SSM. Skipping .env file creation. Upload it manually or the app will fail to start."
-      loop: "{{ ssm_secrets.results }}"
-      loop_control:
-        label: "{{ item.item.name }}"
-      when:
-        - item.rc is defined
-        - item.rc != 0
-
-    # --- 11. AUTHENTICATION & STARTUP ---
+    # --- ECR login + start ---
     - name: Login to AWS ECR
       shell: |
-        aws ecr get-login-password --region {{ aws_region }} | docker login --username AWS --password-stdin {{ ecr_url }}
+        set -e
+        aws ecr get-login-password --region {{ aws_region }} | docker login --username AWS --password-stdin {{ infra_conf }}
+      args:
+        executable: /bin/bash
       register: ecr_login
       retries: 3
       delay: 5
       until: ecr_login.rc == 0
       become_user: deploy
-      no_log: true
+      when: infra_conf | length > 0
 
-    - name: Set ownership of orchestration directory to deploy user
+    - name: Set ownership of orchestration to deploy
       file:
         path: "{{ project_root }}/orchestration"
         owner: deploy
         group: deploy
         recurse: yes
 
-    - name: Select Fluent Bit config for AWS
-      copy:
-        src: "{{ project_root }}/orchestration/fluent-bit.conf"
-        dest: "{{ project_root }}/orchestration/fluent-bit.conf"
-
-    - name: Start Infrastructure (Caddy, Fluent Bit, and Dozzle - DB is external RDS)
+    - name: Start Infrastructure (Caddy and Dozzle)
       shell: |
-        docker compose -f docker-compose-aws.yml up -d caddy fluent-bit dozzle
+        set -e
+        docker compose up -d caddy dozzle
       args:
+        executable: /bin/bash
         chdir: "{{ project_root }}/orchestration"
       become_user: deploy
-

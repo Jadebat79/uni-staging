@@ -1,16 +1,3 @@
-# CloudWatch Log Group for container logs
-# Retention: 3 days as per requirements
-resource "aws_cloudwatch_log_group" "container_logs" {
-  name              = "/staging/containers"
-  retention_in_days = 3
-
-  tags = {
-    Name        = "${var.project_name}-container-logs"
-    Environment = "staging"
-    ManagedBy   = "Terraform"
-  }
-}
-
 # Optional: CloudWatch Alarm for disk usage > 80%
 # This prevents the staging VM from running out of disk space
 # Note: Requires CloudWatch Agent to be installed on the instance
